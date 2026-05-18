@@ -12,9 +12,32 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  switch-model https://huggingface.co/.../Qwen2.5-32B-Q4_K_M.gguf"
+    echo "  switch-model hf.co/unsloth/gemma-4-E2B-it-GGUF:Q6_K"
     echo "  switch-model -f /models/my-model.gguf"
     echo ""
     exit 1
+}
+
+resolve_hf_url() {
+    local REF="$1"
+    local HF_URL="https://huggingface.co"
+
+    if [[ "$REF" =~ ^hf\.co/([^/]+)/([^:]+):(.+)$ ]]; then
+        local USER="${BASH_REMATCH[1]}"
+        local REPO="${BASH_REMATCH[2]}"
+        local VARIANT="${BASH_REMATCH[3]}"
+        local API_URL="${HF_URL}/api/models/${USER}/${REPO}/resolve/main"
+
+        echo "  Resolving ${USER}/${REPO} variant ${VARIANT}..."
+        FILENAME=$(curl -sL "${API_URL}?version=${VARIANT}" -o /dev/null -w '%{url_effective}' | sed 's/.*\///')
+        if [[ -z "$FILENAME" ]] || [[ "$FILENAME" == *"error"* ]]; then
+            echo "ERROR: Could not resolve hf.co reference: ${USER}/${REPO}:${VARIANT}"
+            exit 1
+        fi
+        echo "${HF_URL}/${USER}/${REPO}/resolve/main/${FILENAME}"
+    else
+        echo "$REF"
+    fi
 }
 
 [ $# -eq 0 ] && usage
@@ -26,7 +49,7 @@ if [ "${1}" = "-f" ]; then
     FILENAME=$(basename "$MODEL_PATH")
     echo "✓ Using existing file: $FILENAME ($(du -sh "$MODEL_PATH" | cut -f1))"
 else
-    URL="$1"
+    URL=$(resolve_hf_url "$1")
     FILENAME=$(basename "$URL" | cut -d'?' -f1)
     [[ "$FILENAME" != *.gguf ]] && \
         echo "ERROR: URL must point to a .gguf file (got: $FILENAME)" && exit 1
