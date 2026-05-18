@@ -78,7 +78,10 @@ echo "  Alias: $ALIAS"
 update_secret() {
     local KEY="$1" VAL="$2"
     if grep -q "^${KEY}=" "$SECRETS_FILE"; then
-        sed -i "s|^${KEY}=.*|${KEY}=${VAL}|" "$SECRETS_FILE"
+        grep -v "^${KEY}=" "$SECRETS_FILE" > "${SECRETS_FILE}.tmp"
+        echo "${KEY}=${VAL}" >> "${SECRETS_FILE}.tmp"
+        cat "${SECRETS_FILE}.tmp" > "$SECRETS_FILE"
+        rm "${SECRETS_FILE}.tmp"
     else
         echo "${KEY}=${VAL}" >> "$SECRETS_FILE"
     fi
