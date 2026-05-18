@@ -28,7 +28,7 @@ resolve_hf_url() {
         local VARIANT="${BASH_REMATCH[3]}"
         local TREE_URL="${HF_URL}/api/models/${USER}/${REPO}/tree/main?recursive=true"
 
-        echo "  Searching for *${VARIANT}*.gguf in ${USER}/${REPO}..."
+        echo "  Searching for *${VARIANT}*.gguf in ${USER}/${REPO}..." >&2
         FILENAME=$(curl -sL "$TREE_URL" | \
             jq -r '.[] | select(.type=="file") | select(.path | test("'"${VARIANT}"'";"i")) | .path' | head -1)
 
