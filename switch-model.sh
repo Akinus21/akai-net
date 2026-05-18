@@ -26,12 +26,14 @@ resolve_hf_url() {
         local USER="${BASH_REMATCH[1]}"
         local REPO="${BASH_REMATCH[2]}"
         local VARIANT="${BASH_REMATCH[3]}"
-        local API_URL="${HF_URL}/api/models/${USER}/${REPO}/resolve/main"
+        local TREE_URL="${HF_URL}/api/models/${USER}/${REPO}/tree/main?recursive=true"
 
-        echo "  Resolving ${USER}/${REPO} variant ${VARIANT}..."
-        FILENAME=$(curl -sL "${API_URL}?version=${VARIANT}" -o /dev/null -w '%{url_effective}' | sed 's/.*\///')
-        if [[ -z "$FILENAME" ]] || [[ "$FILENAME" == *"error"* ]]; then
-            echo "ERROR: Could not resolve hf.co reference: ${USER}/${REPO}:${VARIANT}"
+        echo "  Searching for *${VARIANT}*.gguf in ${USER}/${REPO}..."
+        FILENAME=$(curl -sL "$TREE_URL" | \
+            jq -r '.[] | select(.type=="file") | select(.path | test("'"${VARIANT}"'";"i")) | .path' | head -1)
+
+        if [[ -z "$FILENAME" ]] || [[ "$FILENAME" == *"null"* ]]; then
+            echo "ERROR: Could not find *${VARIANT}*.gguf in ${USER}/${REPO}"
             exit 1
         fi
         echo "${HF_URL}/${USER}/${REPO}/resolve/main/${FILENAME}"
