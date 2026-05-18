@@ -99,7 +99,7 @@ These must be set in the repo Settings → Secrets → Actions:
 ## Deployment
 The image is consumed by `ollama-stack` on the Hetzner VPS:
 ```
-~/dockge-stacks/ollama-stack/
+/home/opencode/dockge-stacks/ollama-stack/
 ```
 After a successful build, update the stack to pull the new image:
 ```bash
