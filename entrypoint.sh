@@ -1,11 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
+SECRETS_FILE="/app/.secrets"
+if [ -f "$SECRETS_FILE" ]; then
+    set -a
+    source "$SECRETS_FILE"
+    set +a
+fi
+
 QUEUE_URL="${QUEUE_URL:-http://ollama-queue:8000}"
 WORKER_KEY="${WORKER_KEY:?WORKER_KEY env var is required}"
-MODEL_PATH="${MODEL_PATH:-/models/model.gguf}"
-MODEL_ALIAS="${MODEL_ALIAS:-akai-model}"
-CTX_SIZE="${CTX_SIZE:-8192}"
+MODEL_PATH="${MODEL_PATH:-/models/${AKAI_MODEL_FILENAME:-model.gguf}}"
+MODEL_ALIAS="${MODEL_ALIAS:-${AKAI_MODEL_ALIAS:-akai-model}}"
+CTX_SIZE="${CTX_SIZE:-${AKAI_CTX_SIZE:-8192}}"
 SERVER_PORT="${SERVER_PORT:-8080}"
 
 echo "=== akai-net hub starting ==="
