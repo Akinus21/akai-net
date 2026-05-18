@@ -1,0 +1,132 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    if: github.event_name == 'pull_request' || github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN || github.token }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute new version tag
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        id: tag
+        run: |
+          git fetch --tags
+          PREV=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          VER="${PREV#v}"
+          MAJ=$(echo "$VER" | cut -d. -f1 | sed 's/^0*//'); MAJ=${MAJ:-0}
+          MIN=$(echo "$VER" | cut -d. -f2 | sed 's/^0*//'); MIN=${MIN:-0}
+          PAT=$(echo "$VER" | cut -d. -f3 | sed 's/^0*//'); PAT=${PAT:-0}
+          while git rev-parse "v${MAJ}.${MIN}.${PAT}" >/dev/null 2>&1; do
+            PAT=$((10#$PAT + 1))
+          done
+          NEW_TAG="v${MAJ}.${MIN}.${PAT}"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "version=${NEW_TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/akinus21/akai-net:latest
+            ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version || 'pr' }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          build-args: |
+            LLAMACPP_VERSION=master
+
+      - name: Create git tag and GitHub release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          git config user.email "iron-bot@akinus21.com"
+          git config user.name "Iron Bot"
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          TAG="${{ steps.tag.outputs.new_tag }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Docker image: \`ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}\`"
+
+      - name: Notify webhook — success
+        if: >
+          success() &&
+          github.ref == 'refs/heads/main' &&
+          github.event_name != 'pull_request'
+        env:
+          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
+        run: |
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TAG="${{ steps.tag.outputs.new_tag }}"
+          IMAGE="ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}"
+          PAYLOAD=$(jq -cn \
+            --arg event  "build_success" \
+            --arg repo   "${{ github.repository }}" \
+            --arg run_url "$RUN_URL" \
+            --arg sha    "${{ github.sha }}" \
+            --arg ref    "${{ github.ref_name }}" \
+            --arg actor  "${{ github.actor }}" \
+            --arg tag    "$TAG" \
+            --arg image  "$IMAGE" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,tag:$tag,image:$image}')
+          SIG=$(printf '%s' "$PAYLOAD" | \
+            openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" | awk '{print "sha256="$2}')
+          curl -fsSL -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: build_success" \
+            -H "X-Hub-Signature-256: $SIG" \
+            -d "$PAYLOAD" \
+            "https://webhook.akinus21.com/webhook/akai-net-build" || true
+
+      - name: Notify webhook — failure
+        if: failure() && github.ref == 'refs/heads/main'
+        env:
+          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
+        run: |
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(jq -cn \
+            --arg event   "build_failure" \
+            --arg repo    "${{ github.repository }}" \
+            --arg run_url "$RUN_URL" \
+            --arg sha     "${{ github.sha }}" \
+            --arg ref     "${{ github.ref_name }}" \
+            --arg actor   "${{ github.actor }}" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor}')
+          SIG=$(printf '%s' "$PAYLOAD" | \
+            openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" | awk '{print "sha256="$2}')
+          curl -fsSL -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: build_failure" \
+            -H "X-Hub-Signature-256: $SIG" \
+            -d "$PAYLOAD" \
+            "https://webhook.akinus21.com/webhook/akai-net-build" || true
