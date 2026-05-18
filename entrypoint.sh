@@ -3,8 +3,8 @@ set -euo pipefail
 
 QUEUE_URL="${QUEUE_URL:-http://ollama-queue:8000}"
 WORKER_KEY="${WORKER_KEY:?WORKER_KEY env var is required}"
-MODEL_PATH="${MODEL_PATH:-/models/model.gguf}"
-MODEL_ALIAS="${MODEL_ALIAS:-akai-model}"
+MODEL_PATH="${MODEL_PATH:-/models/gemma-4-E2B-it-Q6_K.gguf}"
+MODEL_ALIAS="${MODEL_ALIAS:-gemma-4}"
 CTX_SIZE="${CTX_SIZE:-8192}"
 SERVER_PORT="${SERVER_PORT:-8080}"
 

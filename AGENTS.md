@@ -55,21 +55,31 @@ akai-net/
 |---|---|---|
 | `QUEUE_URL` | `http://ollama-queue:8000` | Where to discover live workers |
 | `WORKER_KEY` | (required) | Auth key for ollama-queue `/workers` endpoint |
-| `MODEL_PATH` | `/models/model.gguf` | Full path to GGUF inside container |
-| `MODEL_ALIAS` | `akai-model` | Model name exposed in `/v1/models` |
+| `MODEL_PATH` | `/models/gemma-4-E2B-it-Q6_K.gguf` | Full path to GGUF inside container |
+| `MODEL_ALIAS` | `gemma-4` | Model name exposed in `/v1/models` |
 | `CTX_SIZE` | `8192` | Context window size in tokens |
 | `SERVER_PORT` | `8080` | Port llama-server binds to |
 
 ## Switching Models
-From the VPS (outside the container):
-```bash
-# Download from HuggingFace
-docker exec akai-net switch-model https://huggingface.co/.../model.gguf
 
-# Use a file already in the volume
-docker exec akai-net switch-model -f /models/existing.gguf
+From the VPS (outside the container):
+
+```bash
+# Pull from HuggingFace — default quant (Q4_K_M preferred)
+docker exec akai-net switch-model pull hf.co/bartowski/gemma-4-E2B-it-GGUF
+
+# Pull specific quant
+docker exec akai-net switch-model pull hf.co/bartowski/gemma-4-E2B-it-GGUF:Q6_K
+
+# Use a file already downloaded in /models (filename only, no path)
+docker exec akai-net switch-model -f gemma-4-E2B-it-Q6_K.gguf
 ```
-`switch-model` downloads the file, updates `.secrets`, then kills PID 1 so Docker restarts the container with the new model.
+
+Behavior:
+- `pull` hits the HF API to list files, matches by quant tag, downloads if not present, updates .secrets, restarts container
+- `-f` looks in /models automatically; if not found, prints the correct pull command
+- If the requested model is already active, alerts the user and skips restart
+- Restart takes ~30s; container comes back loading the new model
 
 ## CI/CD
 - **Trigger:** every push to `main`
