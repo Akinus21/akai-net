@@ -72,6 +72,24 @@ RAW=$(basename "$MODEL_PATH" .gguf)
 ALIAS=$(echo "$RAW" | sed 's/-[Qq][0-9][^-]*$//' | tr '[:upper:]' '[:lower:]')
 echo "  Alias: $ALIAS"
 
+get_model_ctx_size() {
+    local MODEL="$1"
+    local CTX
+    CTX=$(llama-server -m "$MODEL" --check 2>&1 | \
+        grep -i 'context.*size\|n_ctx\|context_size' | \
+        grep -oE '[0-9]+' | head -1)
+    if [ -z "$CTX" ]; then
+        CTX=$(llama-server -m "$MODEL" --check 2>&1 | \
+            grep -oE 'ro([^)]*context[^)]*)' | \
+            grep -oE '[0-9]+' | head -1)
+    fi
+    echo "${CTX:-8192}"
+}
+
+echo "  Probing context size..."
+CTX_SIZE=$(get_model_ctx_size "$MODEL_PATH")
+echo "  Context size: $CTX_SIZE tokens"
+
 [ ! -f "$SECRETS_FILE" ] && \
     echo "ERROR: $SECRETS_FILE not found — is it bind-mounted?" && exit 1
 
@@ -89,9 +107,11 @@ update_secret() {
 
 update_secret "AKAI_MODEL_FILENAME" "$(basename "$MODEL_PATH")"
 update_secret "AKAI_MODEL_ALIAS"    "$ALIAS"
+update_secret "AKAI_CTX_SIZE"      "$CTX_SIZE"
 echo "✓ Updated .secrets"
 echo "    AKAI_MODEL_FILENAME=$(basename "$MODEL_PATH")"
 echo "    AKAI_MODEL_ALIAS=$ALIAS"
+echo "    AKAI_CTX_SIZE=$CTX_SIZE"
 
 echo "→ Restarting akai-net..."
 kill 1
