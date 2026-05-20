@@ -41,7 +41,7 @@ for i in $(seq 1 12); do
     RESPONSE=$(curl -sf \
         -H "X-Worker-Key: $WORKER_KEY" \
         "${QUEUE_URL}/workers" 2>/dev/null || echo '{}')
-    RPC_STRING=$(echo "$RESPONSE" | jq -r '[.workers[]? | select(.online == true) | "\(.wg_ip):50052")] | join(",")')
+    RPC_STRING=$(echo "$RESPONSE" | jq -r '[.workers[] | select(.online == true) | .wg_ip] | map(. + ":50052") | join(",")')
     WORKER_COUNT=$(echo "$RESPONSE" | jq -r '.workers | length' 2>/dev/null || echo 0)
     if [ -n "$RPC_STRING" ] && [ "$RPC_STRING" != "" ]; then
         echo "✓ Found $WORKER_COUNT live worker(s): $RPC_STRING"
