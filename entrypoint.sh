@@ -70,4 +70,17 @@ fi
 
 echo ""
 echo "→ exec: llama-server ${ARGS[*]}"
-exec llama-server "${ARGS[@]}"
+
+timeout 30s llama-server "${ARGS[@]}" &
+LLAMA_PID=$!
+sleep 5
+
+if ! kill -0 $LLAMA_PID 2>/dev/null; then
+    echo ""
+    echo "⚠  llama-server exited early — removing --rpc and retrying without RPC"
+    ARGS=("${ARGS[@]/#--rpc*/}")
+    echo "→ exec (retry): llama-server ${ARGS[*]}"
+    exec llama-server "${ARGS[@]}"
+fi
+
+wait $LLAMA_PID
