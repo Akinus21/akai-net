@@ -75,19 +75,32 @@ echo "  Alias: $ALIAS"
 get_model_ctx_size() {
     local MODEL="$1"
     local CTX
-    CTX=$(llama-server -m "$MODEL" --check 2>&1 | \
-        grep -i 'context.*size\|n_ctx\|context_size' | \
-        grep -oE '[0-9]+' | head -1)
+
+    CTX=$(timeout 30s llama-server -m "$MODEL" --log-disable -ngl 99 --host 127.0.0.1 --port 9999 2>&1 | \
+        grep -iE 'n_ctx|context.*size' | head -1 | grep -oE '[0-9]+' | head -1)
+
     if [ -z "$CTX" ]; then
-        CTX=$(llama-server -m "$MODEL" --check 2>&1 | \
-            grep -oE 'ro([^)]*context[^)]*)' | \
-            grep -oE '[0-9]+' | head -1)
+        CTX=$(timeout 30s curl -s http://127.0.0.1:9999/v1/models 2>/dev/null | \
+            jq -r '.data[0].meta.n_ctx // empty' 2>/dev/null)
     fi
+
     echo "${CTX:-8192}"
 }
 
+get_worker_vram_gb() {
+    local RESPONSE=$(curl -sf -H "X-Worker-Key: ${WORKER_KEY:-}" "${QUEUE_URL:-http://ollama-queue:11433}/workers" 2>/dev/null)
+    echo "$RESPONSE" | jq -r '[.workers[] | select(.online == true) | .vram_gb] | add // 0' 2>/dev/null
+}
+
 echo "  Probing context size..."
-CTX_SIZE=$(get_model_ctx_size "$MODEL_PATH")
+MODEL_CTX=$(get_model_ctx_size "$MODEL_PATH")
+echo "  Model native context: $MODEL_CTX tokens"
+
+WORKER_VRAM=$(get_worker_vram_gb 2>/dev/null || echo 0)
+echo "  Worker VRAM available: ${WORKER_VRAM} GB"
+
+CTX_SIZE="$MODEL_CTX"
+
 echo "  Context size: $CTX_SIZE tokens"
 
 [ ! -f "$SECRETS_FILE" ] && \
