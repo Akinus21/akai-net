@@ -13,6 +13,7 @@ RUN git clone --depth 100 https://github.com/ggml-org/llama.cpp . \
 RUN cmake -B build \
       -DCMAKE_BUILD_TYPE=Release \
       -DGGML_RPC=ON \
+      -DGGML_AVX512=OFF \
       -DBUILD_SHARED_LIBS=OFF \
       -DLLAMA_CURL=ON \
     && cmake --build build --config Release -j$(nproc) \

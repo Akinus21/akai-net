@@ -80,8 +80,20 @@ if ! kill -0 $LLAMA_PID 2>/dev/null; then
     echo ""
     echo "⚠  llama-server exited early — removing --rpc and retrying without RPC"
     NEW_ARGS=()
+    SKIP_NEXT=false
     for arg in "${ARGS[@]}"; do
-        [[ "$arg" != --rpc* ]] && NEW_ARGS+=("$arg")
+        if $SKIP_NEXT; then
+            SKIP_NEXT=false
+            continue
+        fi
+        if [[ "$arg" == "--rpc" ]]; then
+            SKIP_NEXT=true
+            continue
+        fi
+        if [[ "$arg" == --rpc=* ]]; then
+            continue
+        fi
+        NEW_ARGS+=("$arg")
     done
     echo "→ exec (retry): llama-server ${NEW_ARGS[*]}"
     exec llama-server "${NEW_ARGS[@]}"
