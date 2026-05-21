@@ -118,6 +118,8 @@ update_secret() {
     fi
 }
 
+OLD_FILE=$(grep "^AKAI_MODEL_FILENAME=" "$SECRETS_FILE" 2>/dev/null | cut -d= -f2 || true)
+
 update_secret "AKAI_MODEL_FILENAME" "$(basename "$MODEL_PATH")"
 update_secret "AKAI_MODEL_ALIAS"    "$ALIAS"
 update_secret "AKAI_CTX_SIZE"      "$CTX_SIZE"
@@ -125,6 +127,12 @@ echo "✓ Updated .secrets"
 echo "    AKAI_MODEL_FILENAME=$(basename "$MODEL_PATH")"
 echo "    AKAI_MODEL_ALIAS=$ALIAS"
 echo "    AKAI_CTX_SIZE=$CTX_SIZE"
+
+if [ -n "$OLD_FILE" ] && [ "$OLD_FILE" != "$(basename "$MODEL_PATH")" ] && [ -f "$MODELS_DIR/$OLD_FILE" ]; then
+    echo "→ Removing old model: $OLD_FILE ($(du -sh "$MODELS_DIR/$OLD_FILE" | cut -f1))"
+    rm -f "$MODELS_DIR/$OLD_FILE"
+    echo "✓ Old model deleted"
+fi
 
 echo "→ Restarting akai-net..."
 kill 1
