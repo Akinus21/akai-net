@@ -58,6 +58,7 @@ ARGS=(
     --port     "$SERVER_PORT"
     --ctx-size "$CTX_SIZE"
     -ngl       99
+    -fit       off
 )
 
 if [ -n "$RPC_STRING" ]; then

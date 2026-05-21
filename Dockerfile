@@ -14,8 +14,12 @@ RUN cmake -B build \
       -DCMAKE_BUILD_TYPE=Release \
       -DGGML_RPC=ON \
       -DGGML_AVX512=OFF \
+      -DGGML_AVX512_VBMI=OFF \
+      -DGGML_AVX512_VNNI=OFF \
       -DBUILD_SHARED_LIBS=OFF \
       -DLLAMA_CURL=ON \
+      -DCMAKE_C_FLAGS="-mno-avx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl" \
+      -DCMAKE_CXX_FLAGS="-mno-avx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl" \
     && cmake --build build --config Release -j$(nproc) \
          --target llama-server
 
