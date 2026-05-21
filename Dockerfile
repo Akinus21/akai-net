@@ -1,14 +1,14 @@
 FROM ubuntu:22.04 AS builder
 
-ARG LLAMACPP_VERSION=master-a8681a0
+ARG LLAMACPP_VERSION=a8681a0
 
 RUN apt-get update -q && apt-get install -yq \
     git cmake make g++ curl ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN git clone --branch "$LLAMACPP_VERSION" --depth 1 \
-    https://github.com/ggml-org/llama.cpp .
+RUN git clone --depth 100 https://github.com/ggml-org/llama.cpp . \
+    && git checkout $LLAMACPP_VERSION
 
 RUN cmake -B build \
       -DCMAKE_BUILD_TYPE=Release \
