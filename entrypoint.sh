@@ -75,11 +75,11 @@ echo "→ exec: llama-server ${ARGS[*]}"
 llama-server "${ARGS[@]}" 2>&1 &
 LLAMA_PID=$!
 
-sleep 5
+sleep 15
 
 if ! kill -0 $LLAMA_PID 2>/dev/null; then
     echo ""
-    echo "⚠  llama-server exited early — removing --rpc and retrying without RPC"
+    echo "⚠  llama-server exited early — retrying without RPC (CPU-only, -ngl 0)"
     NEW_ARGS=()
     SKIP_NEXT=false
     for arg in "${ARGS[@]}"; do
@@ -92,6 +92,15 @@ if ! kill -0 $LLAMA_PID 2>/dev/null; then
             continue
         fi
         if [[ "$arg" == --rpc=* ]]; then
+            continue
+        fi
+        if [[ "$arg" == "-ngl" ]]; then
+            SKIP_NEXT=true
+            NEW_ARGS+=("-ngl" "0")
+            continue
+        fi
+        if [[ "$arg" == -ngl* ]]; then
+            NEW_ARGS+=("-ngl" "0")
             continue
         fi
         NEW_ARGS+=("$arg")
