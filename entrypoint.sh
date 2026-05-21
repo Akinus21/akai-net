@@ -15,6 +15,9 @@ MODEL_ALIAS="${MODEL_ALIAS:-${AKAI_MODEL_ALIAS:-akai-model}}"
 CTX_SIZE="${CTX_SIZE:-${AKAI_CTX_SIZE:-8192}}"
 SERVER_PORT="${SERVER_PORT:-8080}"
 
+HUB_COMMIT=$(llama-server --version 2>&1 | grep -oP '\([a-f0-9]+\)' | tr -d '()' || echo "unknown")
+echo "  hub commit: $HUB_COMMIT"
+
 echo "=== akai-net hub starting ==="
 echo "  model:   $MODEL_PATH"
 echo "  alias:   $MODEL_ALIAS"
@@ -49,6 +52,15 @@ for i in $(seq 1 12); do
     fi
     echo "  No live workers yet (attempt $i/12) — retrying in 10s..."
     sleep 10
+done
+
+for i in $(seq 1 3); do
+    curl -sf -X POST \
+        -H "X-Worker-Key: $WORKER_KEY" \
+        -H "Content-Type: application/json" \
+        "${QUEUE_URL}/hub-info" \
+        -d "{\"hub_commit\": \"${HUB_COMMIT}\"}" >/dev/null 2>&1 && break
+    sleep 2
 done
 
 ARGS=(
