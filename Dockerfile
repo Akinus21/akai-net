@@ -1,6 +1,6 @@
 FROM ubuntu:22.04 AS builder
 
-ARG LLAMACPP_VERSION=master
+ARG LLAMACPP_VERSION=master-a8681a0
 
 RUN apt-get update -q && apt-get install -yq \
     git cmake make g++ curl ca-certificates \
