@@ -44,7 +44,7 @@ for i in $(seq 1 12); do
     RESPONSE=$(curl -sf \
         -H "X-Worker-Key: $WORKER_KEY" \
         "${QUEUE_URL}/workers" 2>/dev/null || echo '{}')
-    RPC_STRING=$(echo "$RESPONSE" | jq -r '[.workers[] | select(.online == true) | .wg_ip] | map(. + ":50052") | join(",")')
+    RPC_STRING=$(echo "$RESPONSE" | jq -r '[.workers[] | select(.online == true) | .wg_ip] | map(. + ":50052") | join(",")]' 2>/dev/null || echo "")
     WORKER_COUNT=$(echo "$RESPONSE" | jq -r '.workers | length' 2>/dev/null || echo 0)
     if [ -n "$RPC_STRING" ] && [ "$RPC_STRING" != "" ]; then
         echo "✓ Found $WORKER_COUNT live worker(s): $RPC_STRING"
@@ -77,8 +77,9 @@ if [ -n "$RPC_STRING" ]; then
     ARGS+=(--rpc "$RPC_STRING")
     echo "→ Starting with RPC workers: $RPC_STRING"
 else
-    echo "⚠  No workers found — CPU-only mode (slow)."
-    echo "   Connect a worker then: docker restart akai-net"
+    echo "✘ No workers found — cannot start without GPU workers."
+    echo "   Waiting for workers..."
+    exit 0
 fi
 
 echo ""
@@ -87,38 +88,13 @@ echo "→ exec: llama-server ${ARGS[*]}"
 llama-server "${ARGS[@]}" 2>&1 &
 LLAMA_PID=$!
 
-sleep 15
+sleep 30
 
 if ! kill -0 $LLAMA_PID 2>/dev/null; then
     echo ""
-    echo "⚠  llama-server exited early — retrying without RPC (CPU-only, -ngl 0)"
-    NEW_ARGS=()
-    SKIP_NEXT=false
-    for arg in "${ARGS[@]}"; do
-        if $SKIP_NEXT; then
-            SKIP_NEXT=false
-            continue
-        fi
-        if [[ "$arg" == "--rpc" ]]; then
-            SKIP_NEXT=true
-            continue
-        fi
-        if [[ "$arg" == --rpc=* ]]; then
-            continue
-        fi
-        if [[ "$arg" == "-ngl" ]]; then
-            SKIP_NEXT=true
-            NEW_ARGS+=("-ngl" "0")
-            continue
-        fi
-        if [[ "$arg" == -ngl* ]]; then
-            NEW_ARGS+=("-ngl" "0")
-            continue
-        fi
-        NEW_ARGS+=("$arg")
-    done
-    echo "→ exec (retry): llama-server ${NEW_ARGS[*]}"
-    exec llama-server "${NEW_ARGS[@]}"
+    echo "✘ llama-server exited early — RPC connection likely failed."
+    echo "   Check that worker rpc-server protocol matches hub commit: $HUB_COMMIT"
+    exit 1
 fi
 
 wait $LLAMA_PID
