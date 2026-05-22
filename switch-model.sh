@@ -59,13 +59,17 @@ else
     DEST="$MODELS_DIR/$FILENAME"
     if [ -f "$DEST" ]; then
         echo "✓ Already downloaded: $FILENAME ($(du -sh "$DEST" | cut -f1))"
+        MODEL_PATH="$DEST"
     else
-        echo "→ Downloading $FILENAME..."
-        curl -L --progress-bar -o "$DEST" "$URL"
+        TMPFILE="/tmp/${FILENAME}.part"
+        echo "→ Downloading $FILENAME to /tmp..."
+        curl -L --progress-bar -o "$TMPFILE" "$URL"
         echo ""
+        echo "→ Copying to models volume..."
+        mv "$TMPFILE" "$DEST"
         echo "✓ Download complete ($(du -sh "$DEST" | cut -f1))"
+        MODEL_PATH="$DEST"
     fi
-    MODEL_PATH="$DEST"
 fi
 
 RAW=$(basename "$MODEL_PATH" .gguf)
