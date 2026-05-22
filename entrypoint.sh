@@ -44,12 +44,10 @@ for i in $(seq 1 12); do
     RESPONSE=$(curl -sf \
         -H "X-Worker-Key: $WORKER_KEY" \
         "${QUEUE_URL}/workers" 2>/dev/null || echo '{}')
-    echo "  DEBUG RESPONSE: ${RESPONSE:0:200}"
+    echo "  worker query returned: $(echo "$RESPONSE" | jq -r '.workers | length' 2>/dev/null || echo '?') workers"
     RPC_STRING=$(echo "$RESPONSE" | jq -r '[.workers[] | select(.online == true) | .wg_ip] | map(. + ":50052") | join(",")]' 2>/dev/null || echo "")
-    echo "  DEBUG RPC_STRING: '$RPC_STRING'"
     WORKER_COUNT=$(echo "$RESPONSE" | jq -r '.workers | length' 2>/dev/null || echo 0)
-    echo "  DEBUG WORKER_COUNT: $WORKER_COUNT"
-    if [ -n "$RPC_STRING" ] && [ "$RPC_STRING" != "" ]; then
+    if [ -n "$RPC_STRING" ]; then
         echo "✓ Found $WORKER_COUNT live worker(s): $RPC_STRING"
         break
     fi
