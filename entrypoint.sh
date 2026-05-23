@@ -14,7 +14,9 @@ MODEL_PATH="${MODEL_PATH:-/models/${AKAI_MODEL_FILENAME:-model.gguf}}"
 MODEL_ALIAS="${MODEL_ALIAS:-${AKAI_MODEL_ALIAS:-akai-model}}"
 CTX_SIZE="${CTX_SIZE:-${AKAI_CTX_SIZE:-8192}}"
 SERVER_PORT="${SERVER_PORT:-8080}"
-POLL_INTERVAL="${POLL_INTERVAL:-15}"
+HEALTHD_PORT="${HEALTHD_PORT:-8081}"
+POLL_INTERVAL="${POLL_INTERVAL:-10}"
+STATE_FILE="/tmp/rpc_workers.json"
 
 HUB_COMMIT=$(llama-server --version 2>&1 | grep -oP '\([a-f0-9]+\)' | tr -d '()' || echo "unknown")
 echo "  hub commit: $HUB_COMMIT"
@@ -24,6 +26,7 @@ echo "  model:   $MODEL_PATH"
 echo "  alias:   $MODEL_ALIAS"
 echo "  context: $CTX_SIZE tokens"
 echo "  port:    $SERVER_PORT"
+echo "  healthd: $HEALTHD_PORT"
 
 WAITED=0
 until [ -f "$MODEL_PATH" ]; do
@@ -50,18 +53,12 @@ post_hub_info() {
     done
 }
 
-fetch_workers() {
-    local response
-    response=$(curl -sf \
-        -H "X-Worker-Key: $WORKER_KEY" \
-        "${QUEUE_URL}/workers" 2>/dev/null || echo '{}')
-    local online_ips
-    online_ips=$(echo "$response" | jq -r '.workers[] | select(.online == true) | .wg_ip' 2>/dev/null || echo "")
-    local rpc=""
-    for ip in $online_ips; do
-        [ -n "$rpc" ] && rpc="${rpc},${ip}:50052" || rpc="${ip}:50052"
-    done
-    echo "$rpc"
+read_rpc_from_state() {
+    if [ -f "$STATE_FILE" ]; then
+        jq -r '[.[] | .wg_ip + ":" + (.port | tostring)] | join(",")' "$STATE_FILE" 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
 }
 
 build_args() {
@@ -83,7 +80,7 @@ build_args() {
 start_llama() {
     local rpc_string="$1"
     if [ -z "$rpc_string" ]; then
-        echo "✘ No workers online — llama-server not started"
+        echo "✘ No RPC workers online — llama-server not started"
         return 1
     fi
     build_args "$rpc_string"
@@ -113,14 +110,24 @@ stop_llama() {
     LLAMA_PID=""
 }
 
+echo "→ Starting healthd on :$HEALTHD_PORT"
+python3 /app/healthd.py "$HEALTHD_PORT" &
+HEALTHD_PID=$!
+sleep 1
+if ! kill -0 "$HEALTHD_PID" 2>/dev/null; then
+    echo "ERROR: healthd failed to start"
+    exit 1
+fi
+echo "✓ healthd started (PID $HEALTHD_PID)"
+
 post_hub_info
 
 CURRENT_RPC=""
 echo ""
-echo "=== Starting worker monitor (polling every ${POLL_INTERVAL}s) ==="
+echo "=== Starting worker monitor (checking state every ${POLL_INTERVAL}s) ==="
 
 while true; do
-    NEW_RPC=$(fetch_workers)
+    NEW_RPC=$(read_rpc_from_state)
 
     if [ "$NEW_RPC" != "$CURRENT_RPC" ]; then
         echo ""

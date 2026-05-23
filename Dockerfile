@@ -26,15 +26,16 @@ RUN cmake -B build \
 FROM ubuntu:22.04
 
 RUN apt-get update -q && apt-get install -yq \
-    libgomp1 curl ca-certificates jq \
+    libgomp1 curl ca-certificates jq python3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
 COPY entrypoint.sh /entrypoint.sh
+COPY healthd.py /app/healthd.py
 COPY switch-model.sh /usr/local/bin/switch-model
 RUN chmod +x /entrypoint.sh /usr/local/bin/switch-model
 
 VOLUME ["/models"]
-EXPOSE 8080
+EXPOSE 8080 8081
 
 ENTRYPOINT ["/entrypoint.sh"]
