@@ -61,12 +61,9 @@ else
         echo "✓ Already downloaded: $FILENAME ($(du -sh "$DEST" | cut -f1))"
         MODEL_PATH="$DEST"
     else
-        TMPFILE="/tmp/${FILENAME}.part"
-        echo "→ Downloading $FILENAME to /tmp..."
-        curl -L --progress-bar -o "$TMPFILE" "$URL"
+        echo "→ Downloading $FILENAME..."
+        curl -L --progress-bar -o "$DEST" "$URL"
         echo ""
-        echo "→ Copying to models volume..."
-        mv "$TMPFILE" "$DEST"
         echo "✓ Download complete ($(du -sh "$DEST" | cut -f1))"
         MODEL_PATH="$DEST"
     fi
