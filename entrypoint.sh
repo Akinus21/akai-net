@@ -130,11 +130,17 @@ echo "=== Starting worker monitor (checking state every ${POLL_INTERVAL}s) ==="
 while true; do
     NEW_RPC=$(read_rpc_from_state)
 
+    if [ -z "$NEW_RPC" ] && [ -n "$CURRENT_RPC" ] && [ -n "${LLAMA_PID:-}" ] && kill -0 "$LLAMA_PID" 2>/dev/null; then
+        echo "  (workers temporarily empty — llama-server still running, skipping)"
+        sleep "$POLL_INTERVAL"
+        continue
+    fi
+
     if [ "$NEW_RPC" != "$CURRENT_RPC" ]; then
         if [ -z "$NEW_RPC" ]; then
             CONSECUTIVE_EMPTY=$((CONSECUTIVE_EMPTY + 1))
-            if [ $CONSECUTIVE_EMPTY -lt 3 ]; then
-                echo "  (worker loss ${CONSECUTIVE_EMPTY}/3 — not restarting yet)"
+            if [ $CONSECUTIVE_EMPTY -lt 5 ]; then
+                echo "  (worker loss ${CONSECUTIVE_EMPTY}/5 — not restarting yet)"
                 sleep "$POLL_INTERVAL"
                 continue
             fi

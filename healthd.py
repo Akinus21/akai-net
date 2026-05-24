@@ -8,7 +8,7 @@ import sys
 
 STATE_FILE = "/tmp/rpc_workers.json"
 RPC_PORT = 50052
-TCP_TIMEOUT = 3
+TCP_TIMEOUT = 10
 
 
 def check_rpc_port(wg_ip, port=RPC_PORT, timeout=TCP_TIMEOUT):
