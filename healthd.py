@@ -18,7 +18,8 @@ def check_rpc_port(wg_ip, port=RPC_PORT, timeout=TCP_TIMEOUT):
         s.connect((wg_ip, port))
         s.close()
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[healthd] TCP check {wg_ip}:{port} FAILED: {e}", flush=True)
         return False
 
 
