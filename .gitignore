@@ -2,3 +2,8 @@
 .secrets
 *.gguf
 models/
+tunnel/certs/*.key
+tunnel/certs/*.csr
+tunnel/certs/*.srl
+tunnel/certs/server.crt
+tunnel/certs/worker.crt

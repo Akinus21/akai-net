@@ -1,26 +1,19 @@
 import http.server
 import json
-import socket
-import threading
 import os
-import time
 import sys
+import time
 
 STATE_FILE = "/tmp/rpc_workers.json"
-RPC_PORT = 50052
-TCP_TIMEOUT = 10
+TUNNEL_STATE_FILE = os.getenv("TUNNEL_STATE_FILE", "/app/data/tunnel_workers.json")
 
 
-def check_rpc_port(wg_ip, port=RPC_PORT, timeout=TCP_TIMEOUT):
+def read_tunnel_state():
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect((wg_ip, port))
-        s.close()
-        return True
-    except Exception as e:
-        print(f"[healthd] TCP check {wg_ip}:{port} FAILED: {e}", flush=True)
-        return False
+        with open(TUNNEL_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def write_state(workers):
@@ -32,41 +25,87 @@ def write_state(workers):
 
 class NotifyHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path != "/notify":
-            self.send_response(404)
+        if self.path == "/notify":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.end_headers()
+                return
+
+            raw_workers = data.get("workers", [])
+            tunnel = read_tunnel_state()
+
+            validated = []
+            seen = set()
+            for w in raw_workers:
+                wid = w.get("worker_id", "")
+                local_port = w.get("local_port", 0)
+                if not wid or not local_port:
+                    wg_ip = w.get("wg_ip", "")
+                    if wg_ip:
+                        validated.append({"wg_ip": wg_ip, "port": w.get("port", 50052), "rpc_ok": True})
+                    continue
+                if wid in seen:
+                    continue
+                seen.add(wid)
+                in_tunnel = wid in tunnel
+                validated.append({
+                    "worker_id": wid,
+                    "local_port": local_port,
+                    "rpc_ok": in_tunnel,
+                })
+
+            write_state(validated)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
+            self.wfile.write(json.dumps({
+                "validated": len(validated),
+                "total": len(raw_workers),
+                "workers": validated,
+            }).encode())
             return
 
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
+        if self.path == "/tunnel-notify":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.end_headers()
+                return
 
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            self.send_response(400)
+            tunnel = data.get("workers", {})
+            current = []
+            try:
+                with open(STATE_FILE) as f:
+                    current = json.load(f)
+            except Exception:
+                pass
+
+            existing = {w.get("worker_id"): w for w in current if w.get("worker_id")}
+            for wid, info in tunnel.items():
+                existing[wid] = {
+                    "worker_id": wid,
+                    "local_port": info["local_port"],
+                    "rpc_ok": True,
+                }
+
+            surviving = [existing[wid] for wid in tunnel if wid in existing]
+            write_state(surviving)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
+            self.wfile.write(json.dumps({"workers": len(surviving)}).encode())
             return
 
-        raw_workers = data.get("workers", [])
-        validated = []
-        for w in raw_workers:
-            ip = w.get("wg_ip", "")
-            if not ip:
-                continue
-            reachable = check_rpc_port(ip)
-            entry = {"wg_ip": ip, "port": w.get("port", RPC_PORT), "rpc_ok": reachable}
-            validated.append(entry)
-
-        write_state(validated)
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_response(404)
         self.end_headers()
-        self.wfile.write(json.dumps({
-            "validated": len(validated),
-            "total": len(raw_workers),
-            "workers": validated,
-        }).encode())
 
     def do_GET(self):
         if self.path == "/health":
@@ -79,6 +118,13 @@ class NotifyHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 workers = []
             self.wfile.write(json.dumps({"workers": workers}).encode())
+            return
+
+        if self.path == "/tunnel":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(read_tunnel_state()).encode())
             return
 
         self.send_response(404)

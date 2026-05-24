@@ -55,7 +55,20 @@ post_hub_info() {
 
 read_rpc_from_state() {
     if [ -f "$STATE_FILE" ]; then
-        jq -r '[.[] | .wg_ip + ":" + (.port | tostring)] | join(",")' "$STATE_FILE" 2>/dev/null || echo ""
+        python3 -c "
+import json, sys
+try:
+    workers = json.load(open('$STATE_FILE'))
+    parts = []
+    for w in workers:
+        if 'local_port' in w:
+            parts.append(f\"127.0.0.1:{w['local_port']}\")
+        elif 'wg_ip' in w:
+            parts.append(f\"{w['wg_ip']}:{w.get('port', 50052)}\")
+    print(','.join(parts) if parts else '')
+except Exception:
+    print('')
+" 2>/dev/null || echo ""
     else
         echo ""
     fi
