@@ -55,8 +55,7 @@ class NotifyHandler(http.server.BaseHTTPRequestHandler):
                 continue
             reachable = check_rpc_port(ip)
             entry = {"wg_ip": ip, "port": w.get("port", RPC_PORT), "rpc_ok": reachable}
-            if reachable:
-                validated.append(entry)
+            validated.append(entry)
 
         write_state(validated)
 
