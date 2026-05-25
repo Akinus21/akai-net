@@ -60,7 +60,7 @@ jobs:
           cache-from: type=gha
           cache-to:   type=gha,mode=max
           build-args: |
-            LLAMACPP_VERSION=master
+            LLAMACPP_VERSION=a8681a0
 
       - name: Create git tag and GitHub release
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
