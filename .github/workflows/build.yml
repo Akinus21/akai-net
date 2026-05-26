@@ -112,8 +112,14 @@ jobs:
         if: failure() && github.ref == 'refs/heads/main'
         env:
           WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
         run: |
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ERROR_TEXT="Docker build failed. See $RUN_URL"
+          if [ -n "$GH_TOKEN" ]; then
+            LOGS=$(gh run view ${{ github.run_id }} --log 2>/dev/null | tail -200 || echo "(gh CLI not available)")
+            ERROR_TEXT="Docker build failed:\n\n${LOGS}"
+          fi
           PAYLOAD=$(jq -cn \
             --arg event   "build_failure" \
             --arg repo    "${{ github.repository }}" \
@@ -121,7 +127,8 @@ jobs:
             --arg sha     "${{ github.sha }}" \
             --arg ref     "${{ github.ref_name }}" \
             --arg actor   "${{ github.actor }}" \
-            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor}')
+            --arg error   "$ERROR_TEXT" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,error:$error}')
           SIG=$(printf '%s' "$PAYLOAD" | \
             openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" | awk '{print "sha256="$2}')
           curl -fsSL -X POST \
