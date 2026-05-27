@@ -7,7 +7,7 @@ RUN apt-get update -q && apt-get install -yq \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN git clone --depth 100 https://github.com/ggml-org/llama.cpp . \
+RUN git clone https://github.com/ggml-org/llama.cpp . \
     && git checkout $LLAMACPP_VERSION
 
 RUN cmake -B build \
