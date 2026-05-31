@@ -92,10 +92,10 @@ try:
     workers = json.load(open('$STATE_FILE'))
     valid = []
     for w in workers:
-        if 'wg_ip' in w:
-            valid.append({'wg_ip': w['wg_ip'], 'port': w.get('port', 50052)})
-        elif 'local_port' in w:
-            valid.append({'local': w['local_port']})
+        if w.get('rpc_ok') and w.get('local_port'):
+            valid.append({'local': w['local_port'], 'worker_id': w.get('worker_id', '')})
+        elif w.get('wg_ip') and w.get('port'):
+            valid.append({'wg_ip': w['wg_ip'], 'port': w['port']})
     print(json.dumps(valid))
 except Exception:
     print('[]')
@@ -186,37 +186,26 @@ import json, sys, socket
 workers = json.loads(sys.argv[1])
 valid_rpc = []
 unreachable = []
+wg_only = []
 
 for w in workers:
-    if 'local' in w:
+    if 'local' in w and w.get('worker_id'):
         valid_rpc.append(f"127.0.0.1:{w['local']}")
-    else:
-        host = w['wg_ip']
-        port = w.get('port', 50052)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex((host, port))
-            sock.close()
-            if result == 0:
-                valid_rpc.append(f"{host}:{port}")
-            else:
-                unreachable.append(f"{host}:{port}")
-        except Exception:
-            unreachable.append(f"{host}:{port}")
+    elif 'wg_ip' in w:
+        wg_only.append(f"{w['wg_ip']}:{w.get('port', 50052)}")
 
-if unreachable:
-    print('UNREACHABLE: ' + ','.join(unreachable), file=sys.stderr)
+if wg_only:
+    print('WG_FALLBACK: ' + ','.join(wg_only), file=sys.stderr)
 print(','.join(valid_rpc))
 PYEOF
 )
         PYEXIT=$?
         set -euo pipefail
-        UNREACHABLE_MSG=$(echo "$RESULT" | grep "^UNREACHABLE:" | sed 's/^UNREACHABLE: //' 2>/dev/null || true)
-        NEW_RPC=$(echo "$RESULT" | grep -v "^UNREACHABLE:" 2>/dev/null || true)
+        UNREACHABLE_MSG=$(echo "$RESULT" | grep "^WG_FALLBACK:" | sed 's/^WG_FALLBACK: //' 2>/dev/null || true)
+        NEW_RPC=$(echo "$RESULT" | grep -v "^WG_FALLBACK:" 2>/dev/null || true)
 
         if [ -n "$UNREACHABLE_MSG" ]; then
-            echo "  ⚠ Unreachable workers: $UNREACHABLE_MSG"
+            echo "  ⚠ WireGuard workers (tunnel down): $UNREACHABLE_MSG"
         fi
     fi
 
