@@ -182,7 +182,7 @@ while true; do
         RESULT=$(python3 -c "
 import json, sys, socket
 
-workers = json.loads('$VALID_WORKERS')
+workers = json.loads(\"$VALID_WORKERS\")
 valid_rpc = []
 unreachable = []
 
