@@ -47,7 +47,7 @@ akai-net/
   (compiled without GGML_RPC=ON). This is why we build our own image.
 - The hub holds the GGUF model file. Workers hold NO model file.
 - Workers run `rpc-server` (separate binary, also from llama.cpp).
-- RPC traffic travels only over WireGuard VPN (10.8.0.0/24).
+- RPC traffic travels over TLS tunnel through `tunnel.akinus21.com:443` to the ollama-queue tunnel server
 - `llama-server` reads `--rpc` at startup only — restart the container to pick up new workers.
 
 ## Environment Variables
@@ -98,6 +98,24 @@ docker compose pull akai-net
 docker compose up -d akai-net
 ```
 
+## Docker Socket Access
+This environment has access to the Docker socket at `/var/run/docker.sock`. This allows:
+- Running `docker exec`, `docker logs`, `docker ps`, `docker cp` commands directly
+- Inspecting containers without SSH
+- Access via `docker exec ollama-queue /bin/bash -c "..."` to run commands inside containers
+
+When running commands inside containers that lack common tools (ps, curl, etc.), use Python for HTTP:
+```bash
+# Test HTTP connectivity inside a container
+docker exec CONTAINER /bin/bash -c "python3 -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8081/health\").read())'"
+
+# List processes via /proc
+docker exec CONTAINER /bin/bash -c "ls -la /proc/*/exe 2>/dev/null | grep python"
+
+# Copy files
+docker cp local/file.txt CONTAINER:/app/
+```
+
 ## Build Notes
 - Build takes ~10 minutes — llama.cpp compiles from source
 - GitHub Actions build cache (type=gha) is enabled — subsequent builds are faster
@@ -116,7 +134,7 @@ This system spans three repos that work together:
 | `ollama-stack` | `/home/opencode/dockge-stacks/ollama-stack` | Full Docker Compose stack on VPS (compose.yaml, wg-easy, etc.) |
 
 ### How They Connect
-- **ollama-queue** registers workers and their WireGuard IPs (10.8.0.0/24)
-- **akai-net** (hub) queries ollama-queue for worker list, then connects via RPC on port 50052
-- **heartbeat** from workers confirms two things: (1) worker→queue HTTP is up, (2) worker→hub TCP ping on 10.8.0.x:50052 is up
-- Both must pass for a worker to be considered "online" — if only the queue HTTP succeeds but RPC port fails, the worker logs a FAIL to its terminal
+- **ollama-queue** runs a TLS tunnel server (port 50053) that proxies RPC between workers and the akai-net hub
+- **Workers** connect via mTLS to `tunnel.akinus21.com:443`, get assigned a local port (e.g., 50060) on the VPS
+- **akai-net** connects to `127.0.0.1:<local_port>` to reach workers through the tunnel proxy
+- **heartbeat** confirms worker→queue connectivity; tunnel state file tracks which workers have active tunnels
