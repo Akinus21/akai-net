@@ -179,6 +179,7 @@ while true; do
         NEW_RPC=""
         UNREACHABLE_MSG=""
     else
+        set +e
         RESULT=$(python3 - "$VALID_WORKERS" <<'PYEOF'
 import json, sys, socket
 
@@ -209,15 +210,17 @@ if unreachable:
 print(','.join(valid_rpc))
 PYEOF
 )
-        UNREACHABLE_MSG=$(echo "$RESULT" | grep "^UNREACHABLE:" | sed 's/^UNREACHABLE: //')
-        NEW_RPC=$(echo "$RESULT" | grep -v "^UNREACHABLE:")
+        PYEXIT=$?
+        set -euo pipefail
+        UNREACHABLE_MSG=$(echo "$RESULT" | grep "^UNREACHABLE:" | sed 's/^UNREACHABLE: //' 2>/dev/null || true)
+        NEW_RPC=$(echo "$RESULT" | grep -v "^UNREACHABLE:" 2>/dev/null || true)
 
         if [ -n "$UNREACHABLE_MSG" ]; then
             echo "  ⚠ Unreachable workers: $UNREACHABLE_MSG"
         fi
     fi
 
-    if [ -z "$NEW_RPC" ] && [ -n "$CURRENT_RPC" ] && [ -n "${LLAMA_PID:-}" ] && kill -0 "$LLAMA_PID" 2>/dev/null; then
+    if [ -z "$NEW_RPC" ] && [ -n "$CURRENT_RPC" ] && kill -0 "${LLAMA_PID:-}" 2>/dev/null; then
         echo "  (workers temporarily empty — llama-server still running, skipping)"
         sleep "$POLL_INTERVAL"
         continue
