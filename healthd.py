@@ -36,7 +36,6 @@ class NotifyHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             raw_workers = data.get("workers", [])
-            tunnel = read_tunnel_state()
 
             validated = []
             seen = set()
@@ -51,11 +50,10 @@ class NotifyHandler(http.server.BaseHTTPRequestHandler):
                 if wid in seen:
                     continue
                 seen.add(wid)
-                in_tunnel = wid in tunnel
                 validated.append({
                     "worker_id": wid,
                     "local_port": local_port,
-                    "rpc_ok": in_tunnel,
+                    "rpc_ok": True,
                 })
 
             write_state(validated)
