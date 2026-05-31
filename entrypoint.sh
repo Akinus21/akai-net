@@ -179,16 +179,16 @@ while true; do
         NEW_RPC=""
         UNREACHABLE_MSG=""
     else
-        RESULT=$(python3 -c "
+        RESULT=$(python3 - "$VALID_WORKERS" <<'PYEOF'
 import json, sys, socket
 
-workers = json.loads(\"$VALID_WORKERS\")
+workers = json.loads(sys.argv[1])
 valid_rpc = []
 unreachable = []
 
 for w in workers:
     if 'local' in w:
-        valid_rpc.append(f\"127.0.0.1:{w['local']}\")
+        valid_rpc.append(f"127.0.0.1:{w['local']}")
     else:
         host = w['wg_ip']
         port = w.get('port', 50052)
@@ -198,16 +198,17 @@ for w in workers:
             result = sock.connect_ex((host, port))
             sock.close()
             if result == 0:
-                valid_rpc.append(f\"{host}:{port}\")
+                valid_rpc.append(f"{host}:{port}")
             else:
-                unreachable.append(f\"{host}:{port}\")
+                unreachable.append(f"{host}:{port}")
         except Exception:
-            unreachable.append(f\"{host}:{port}\")
+            unreachable.append(f"{host}:{port}")
 
 if unreachable:
     print('UNREACHABLE: ' + ','.join(unreachable), file=sys.stderr)
 print(','.join(valid_rpc))
-" 2>&1)
+PYEOF
+)
         UNREACHABLE_MSG=$(echo "$RESULT" | grep "^UNREACHABLE:" | sed 's/^UNREACHABLE: //')
         NEW_RPC=$(echo "$RESULT" | grep -v "^UNREACHABLE:")
 
