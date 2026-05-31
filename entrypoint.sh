@@ -185,8 +185,8 @@ workers = json.loads(sys.argv[1])
 valid = []
 
 for w in workers:
-    if w.get('local_port'):
-        valid.append("127.0.0.1:" + str(w["local_port"]))
+    if w.get('local'):
+        valid.append("127.0.0.1:" + str(w["local"]))
 
 print(','.join(valid))
 PYEOF
