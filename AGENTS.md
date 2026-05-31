@@ -103,3 +103,18 @@ docker compose up -d akai-net
 - GitHub Actions build cache (type=gha) is enabled — subsequent builds are faster
 - `LLAMACPP_VERSION=master` tracks latest llama.cpp; pin to a tag if stability is needed
   e.g. `LLAMACPP_VERSION=b4444`
+
+## Related Projects
+This system spans three repos that work together:
+
+| Repo | Location | Purpose |
+|---|---|---|
+| `akai-net` | `/home/opencode/projects/akai-net` | Hub — runs llama-server with RPC workers |
+| `akai-agent` | `/home/opencode/projects/akai-agent` | Server-side worker manager — runs rpc-server on VPS |
+| `akai-android-agent` | `/home/opencode/projects/akai-android-agent` | Android worker — Termux app that runs rpc-server on mobile |
+
+### How They Connect
+- **ollama-queue** registers workers and their WireGuard IPs (10.8.0.0/24)
+- **akai-net** (hub) queries ollama-queue for worker list, then connects via RPC on port 50052
+- **heartbeat** from workers confirms two things: (1) worker→queue HTTP is up, (2) worker→hub TCP ping on 10.8.0.x:50052 is up
+- Both must pass for a worker to be considered "online" — if only the queue HTTP succeeds but RPC port fails, the worker logs a FAIL to its terminal
