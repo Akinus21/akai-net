@@ -177,36 +177,20 @@ while true; do
 
     if [ "$VALID_WORKERS" = "[]" ] || [ -z "$VALID_WORKERS" ]; then
         NEW_RPC=""
-        UNREACHABLE_MSG=""
     else
-        set +e
-        RESULT=$(python3 - "$VALID_WORKERS" <<'PYEOF'
-import json, sys, socket
+        NEW_RPC=$(python3 - "$VALID_WORKERS" <<'PYEOF'
+import json, sys
 
 workers = json.loads(sys.argv[1])
-valid_rpc = []
-unreachable = []
-wg_only = []
+valid = []
 
 for w in workers:
-    if 'local' in w and w.get('worker_id'):
-        valid_rpc.append(f"127.0.0.1:{w['local']}")
-    elif 'wg_ip' in w:
-        wg_only.append(f"{w['wg_ip']}:{w.get('port', 50052)}")
+    if w.get('local_port'):
+        valid.append(f"127.0.0.1:{w['local_port']}")
 
-if wg_only:
-    print('WG_FALLBACK: ' + ','.join(wg_only), file=sys.stderr)
-print(','.join(valid_rpc))
+print(','.join(valid))
 PYEOF
 )
-        PYEXIT=$?
-        set -euo pipefail
-        UNREACHABLE_MSG=$(echo "$RESULT" | grep "^WG_FALLBACK:" | sed 's/^WG_FALLBACK: //' 2>/dev/null || true)
-        NEW_RPC=$(echo "$RESULT" | grep -v "^WG_FALLBACK:" 2>/dev/null || true)
-
-        if [ -n "$UNREACHABLE_MSG" ]; then
-            echo "  ⚠ WireGuard workers (tunnel down): $UNREACHABLE_MSG"
-        fi
     fi
 
     if [ -z "$NEW_RPC" ] && [ -n "$CURRENT_RPC" ] && kill -0 "${LLAMA_PID:-}" 2>/dev/null; then
