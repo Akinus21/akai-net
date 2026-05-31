@@ -8,7 +8,7 @@ if [ -f "$SECRETS_FILE" ]; then
     set +a
 fi
 
-QUEUE_URL="${QUEUE_URL:-http://ollama-queue:8000}"
+QUEUE_URL="${QUEUE_URL:-http://ollama-queue:11433}"
 WORKER_KEY="${WORKER_KEY:?WORKER_KEY env var is required}"
 MODEL_PATH="${MODEL_PATH:-/models/${AKAI_MODEL_FILENAME:-model.gguf}}"
 MODEL_ALIAS="${MODEL_ALIAS:-${AKAI_MODEL_ALIAS:-akai-model}}"
