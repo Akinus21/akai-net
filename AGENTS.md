@@ -112,6 +112,8 @@ This system spans three repos that work together:
 | `akai-net` | `/home/opencode/projects/akai-net` | Hub — runs llama-server with RPC workers |
 | `akai-agent` | `/home/opencode/projects/akai-agent` | Server-side worker manager — runs rpc-server on VPS |
 | `akai-android-agent` | `/home/opencode/projects/akai-android-agent` | Android worker — Termux app that runs rpc-server on mobile |
+| `ollama-queue` | `/home/opencode/dockge-stacks/ollama-stack/queue` | Queue proxy — routes requests to akai-net hub |
+| `ollama-stack` | `/home/opencode/dockge-stacks/ollama-stack` | Full Docker Compose stack on VPS (compose.yaml, wg-easy, etc.) |
 
 ### How They Connect
 - **ollama-queue** registers workers and their WireGuard IPs (10.8.0.0/24)
