@@ -53,6 +53,16 @@ post_hub_info() {
     done
 }
 
+rpc_ping() {
+    local host="$1"
+    local port="${2:-50052}"
+    if timeout 3 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 read_rpc_from_state() {
     if [ -f "$STATE_FILE" ]; then
         python3 -c "
@@ -71,6 +81,27 @@ except Exception:
 " 2>/dev/null || echo ""
     else
         echo ""
+    fi
+}
+
+read_rpc_validated() {
+    if [ -f "$STATE_FILE" ]; then
+        python3 -c "
+import json, sys
+try:
+    workers = json.load(open('$STATE_FILE'))
+    valid = []
+    for w in workers:
+        if 'wg_ip' in w:
+            valid.append({'wg_ip': w['wg_ip'], 'port': w.get('port', 50052)})
+        elif 'local_port' in w:
+            valid.append({'local': w['local_port']})
+    print(json.dumps(valid))
+except Exception:
+    print('[]')
+" 2>/dev/null || echo "[]"
+    else
+        echo "[]"
     fi
 }
 
@@ -142,7 +173,48 @@ echo ""
 echo "=== Starting worker monitor (checking state every ${POLL_INTERVAL}s) ==="
 
 while true; do
-    NEW_RPC=$(read_rpc_from_state)
+    VALID_WORKERS=$(read_rpc_validated)
+
+    if [ "$VALID_WORKERS" = "[]" ] || [ -z "$VALID_WORKERS" ]; then
+        NEW_RPC=""
+        UNREACHABLE_MSG=""
+    else
+        RESULT=$(python3 -c "
+import json, sys, socket
+
+workers = json.loads('$VALID_WORKERS')
+valid_rpc = []
+unreachable = []
+
+for w in workers:
+    if 'local' in w:
+        valid_rpc.append(f\"127.0.0.1:{w['local']}\")
+    else:
+        host = w['wg_ip']
+        port = w.get('port', 50052)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            if result == 0:
+                valid_rpc.append(f\"{host}:{port}\")
+            else:
+                unreachable.append(f\"{host}:{port}\")
+        except Exception:
+            unreachable.append(f\"{host}:{port}\")
+
+if unreachable:
+    print('UNREACHABLE: ' + ','.join(unreachable), file=sys.stderr)
+print(','.join(valid_rpc))
+" 2>&1)
+        UNREACHABLE_MSG=$(echo "$RESULT" | grep "^UNREACHABLE:" | sed 's/^UNREACHABLE: //')
+        NEW_RPC=$(echo "$RESULT" | grep -v "^UNREACHABLE:")
+
+        if [ -n "$UNREACHABLE_MSG" ]; then
+            echo "  ⚠ Unreachable workers: $UNREACHABLE_MSG"
+        fi
+    fi
 
     if [ -z "$NEW_RPC" ] && [ -n "$CURRENT_RPC" ] && [ -n "${LLAMA_PID:-}" ] && kill -0 "$LLAMA_PID" 2>/dev/null; then
         echo "  (workers temporarily empty — llama-server still running, skipping)"
