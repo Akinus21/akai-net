@@ -82,6 +82,7 @@ build_args() {
         --host     0.0.0.0
         --port     "$SERVER_PORT"
         --ctx-size "$CTX_SIZE"
+        --timeout  600
         -ngl       99
         -fit       off
     )
