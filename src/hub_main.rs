@@ -4,9 +4,8 @@ use anyhow::Result;
 use pipeline::{HubMessage, WorkerInfo, ModelConfig, calculate_layer_assignment};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn, error};
 
