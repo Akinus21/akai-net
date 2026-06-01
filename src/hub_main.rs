@@ -35,7 +35,6 @@ async fn main() -> Result<()> {
 
     let hub_port: u16 = std::env::var("HUB_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080);
     let worker_port: u16 = std::env::var("WORKER_PORT").unwrap_or_else(|_| "50051".to_string()).parse().unwrap_or(50051);
-    let admin_key = std::env::var("ADMIN_KEY").unwrap_or_else(|_| "".to_string());
     let admin_users = parse_admin_users();
 
     info!("Admin users: {}", admin_users.join(", "));
@@ -90,7 +89,7 @@ async fn main() -> Result<()> {
     let http_workers = workers.clone();
     let http_state = state.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, http_workers, http_state, admin_key, admin_users).await
+        start_http_server(hub_port, http_workers, http_state, admin_users).await
     });
 
     // Keep main task alive
@@ -241,7 +240,7 @@ async fn handle_worker_connection(
     }
 }
 
-async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, admin_key: String, admin_users: Vec<String>) -> Result<()> {
+async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, admin_users: Vec<String>) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -306,43 +305,41 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                     });
                     (200, serde_json::to_string(&resp).unwrap_or_default())
                 } else if path.starts_with("POST /admin/model") {
-                    if admin_key.is_empty() || auth_key == admin_key {
-                        match serde_json::from_str::<serde_json::Value>(body) {
-                            Ok(json) => {
-                                let username = json["username"].as_str()
-                                    .unwrap_or("")
-                                    .to_lowercase();
-                                let authorized = admin_users.is_empty() || admin_users.iter().any(|u| u == &username);
-                                if !authorized {
-                                    info!("Model change rejected: user '{}' not authorized", username);
-                                    (403, r#"{"error":"user not authorized"}"#.to_string())
-                                } else {
-                                    let name = json["name"].as_str().unwrap_or("unknown").to_string();
-                                    let layers = json["layers"].as_u64().unwrap_or(32) as usize;
-                                    let url = json["url"].as_str().unwrap_or("").to_string();
+                    // No admin key required - authenticated user handled by queue
+                    // Just check if username is in authorized list
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(json) => {
+                            let username = json["username"].as_str()
+                                .unwrap_or("")
+                                .to_lowercase();
+                            let authorized = admin_users.is_empty() || admin_users.iter().any(|u| u == &username);
+                            if !authorized {
+                                info!("Model change rejected: user '{}' not authorized", username);
+                                (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else {
+                                let name = json["name"].as_str().unwrap_or("unknown").to_string();
+                                let layers = json["layers"].as_u64().unwrap_or(32) as usize;
+                                let url = json["url"].as_str().unwrap_or("").to_string();
 
-                                    let mut state_guard = state.lock().await;
-                                    state_guard.model.name = name;
-                                    state_guard.model.num_layers = layers;
-                                    state_guard.model_url = url;
+                                let mut state_guard = state.lock().await;
+                                state_guard.model.name = name;
+                                state_guard.model.num_layers = layers;
+                                state_guard.model_url = url;
 
-                                    info!("Model updated by {}: {} ({} layers)", username, state_guard.model.name, layers);
+                                info!("Model updated by {}: {} ({} layers)", username, state_guard.model.name, layers);
 
-                                    let resp = serde_json::json!({
-                                        "status": "ok",
-                                        "model": state_guard.model.name,
-                                        "layers": layers,
-                                    });
-                                    (200, serde_json::to_string(&resp).unwrap_or_default())
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to parse admin request: {}", e);
-                                (400, r#"{"error":"invalid request body"}"#.to_string())
+                                let resp = serde_json::json!({
+                                    "status": "ok",
+                                    "model": state_guard.model.name,
+                                    "layers": layers,
+                                });
+                                (200, serde_json::to_string(&resp).unwrap_or_default())
                             }
                         }
-                    } else {
-                        (401, r#"{"error":"unauthorized"}"#.to_string())
+                        Err(e) => {
+                            error!("Failed to parse admin request: {}", e);
+                            (400, r#"{"error":"invalid request body"}"#.to_string())
+                        }
                     }
                 } else if path.starts_with("POST /v1/chat/completions") {
                     let resp = serde_json::json!({
