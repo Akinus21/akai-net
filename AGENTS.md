@@ -61,11 +61,23 @@ Layer assignment is calculated by hub based on worker capabilities:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MODEL_NAME` | `unknown` | Model name in `/v1/models` |
+| `MODEL_NAME` | `unknown` | Model name/HF stub (e.g., `hf.co/author/model:Q5_K_S`) |
 | `MODEL_LAYERS` | `32` | Total layers in model |
 | `HIDDEN_SIZE` | `4096` | Hidden state dimension |
 | `HUB_PORT` | `8080` | HTTP API port |
 | `WORKER_PORT` | `50051` | Worker protocol port |
+| `ADMIN_KEY` | (none) | Bearer token for admin API |
+| `ADMIN_USERS` | `akinus` | Comma-separated list of authorized usernames |
+
+## Admin API
+
+```bash
+# Hot-swap model
+curl -X POST http://localhost:8080/admin/model \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "akinus", "name": "hf.co/author/model:Q5_K_S", "layers": 32, "url": "hf.co/author/model:Q5_K_S"}'
+```
 
 ## Build & Deployment
 
@@ -75,7 +87,12 @@ cargo build --release
 
 # Or use Docker
 docker build -t akai-net .
-docker run -p 8080:8080 -p 50051:50051 akai-net
+docker run -p 8080:8080 -p 50051:50051 \
+  -e ADMIN_KEY=your-secret-key \
+  -e ADMIN_USERS=akinus,otheruser \
+  -e MODEL_NAME=hf.co/author/model:Q5_K_S \
+  -e MODEL_LAYERS=32 \
+  akai-net
 ```
 
 ## CI/CD
