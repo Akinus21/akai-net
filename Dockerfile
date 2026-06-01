@@ -4,14 +4,17 @@ RUN apt-get update -q && apt-get install -yq \
     libgomp1 curl ca-certificates jq python3 python3-pip python3-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch CPU (hub does no inference, but Petals client needs it)
+# Install PyTorch CPU first (hub does no inference, but Petals client needs it)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-# Install Petals and dependencies
-RUN pip install --no-cache-dir \
-    petals \
-    transformers>=4.36.0 \
-    accelerate>=0.25.0
+# Install transformers first (petals depends on it)
+RUN pip install --no-cache-dir transformers>=4.36.0
+
+# Install accelerate
+RUN pip install --no-cache-dir accelerate>=0.25.0
+
+# Install petals separately (last due to dependency issues)
+RUN pip install --no-cache-dir petals
 
 COPY pipeline_hub.py /app/pipeline_hub.py
 COPY healthd.py /app/healthd.py
