@@ -12,7 +12,7 @@ use tracing::{info, warn, error};
 type WorkerMap = Arc<RwLock<HashMap<String, WorkerConnection>>>;
 
 struct WorkerConnection {
-    stream: TcpStream,
+    stream: Arc<TcpStream>,
     info: WorkerInfo,
 }
 
@@ -136,7 +136,7 @@ async fn handle_worker_connection(
             {
                 let mut workers_guard = workers.write().await;
                 workers_guard.insert(info.id.clone(), WorkerConnection {
-                    stream: stream.try_clone()?,
+                    stream: Arc::new(stream.try_clone()?),
                     info: info.clone(),
                 });
             }
