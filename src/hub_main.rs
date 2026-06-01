@@ -1,7 +1,7 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment, WorkerHeartbeat};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -136,7 +136,7 @@ async fn handle_worker_connection(
             {
                 let mut workers_guard = workers.write().await;
                 workers_guard.insert(info.id.clone(), WorkerConnection {
-                    stream: stream.try_clone().await?,
+                    stream: stream.try_clone()?,
                     info: info.clone(),
                 });
             }

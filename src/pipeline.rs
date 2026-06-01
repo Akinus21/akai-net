@@ -9,6 +9,8 @@ pub struct WorkerInfo {
     pub has_gpu: bool,
     #[serde(default)]
     pub load: f32,
+    #[serde(default)]
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
