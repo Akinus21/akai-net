@@ -1,29 +1,31 @@
+FROM rust:1.75 as builder
+
+WORKDIR /build
+
+RUN apt-get update -q && apt-get install -yq \
+    cmake make g++ \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock* ./
+COPY src/ ./src/
+
+RUN cargo build --release --bin hub
+
 FROM ubuntu:22.04
 
 RUN apt-get update -q && apt-get install -yq \
-    libgomp1 curl ca-certificates jq python3 python3-pip python3-venv \
+    libgomp1 curl ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install torch FIRST with a compatible version for Petals/hivemind
-RUN pip install --no-cache-dir torch==2.0.1 --index-url https://download.pytorch.org/whl/cpu
+COPY --from=builder /build/target/release/hub /usr/local/bin/
 
-# Install aiohttp and httpx for the hub server
-RUN pip install --no-cache-dir aiohttp httpx
+ENV RUST_LOG=info
+ENV MODEL_NAME=unknown
+ENV MODEL_LAYERS=32
+ENV HIDDEN_SIZE=4096
+ENV HUB_PORT=8080
+ENV WORKER_PORT=50051
 
-# Install Petals (should use the older torch we installed)
-RUN pip install --no-cache-dir petals
+EXPOSE 8080 50051
 
-COPY pipeline_hub.py /app/pipeline_hub.py
-COPY healthd.py /app/healthd.py
-COPY switch-model.sh /usr/local/bin/switch-model
-RUN chmod +x /app/pipeline_hub.py /usr/local/bin/switch-model
-
-ENV PYTHONUNBUFFERED=1
-ENV QUEUE_URL=http://ollama-queue:8000
-ENV TUNNEL_HOST=tunnel.akinus21.com
-ENV TUNNEL_PORT=443
-
-VOLUME ["/models"]
-EXPOSE 8080 8081
-
-CMD ["python3", "-u", "/app/pipeline_hub.py"]
+CMD ["hub"]
