@@ -1,5 +1,7 @@
+mod pipeline;
+
 use anyhow::Result;
-use crate::pipeline::{HubMessage, WorkerInfo, ModelConfig, calculate_layer_assignment};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, calculate_layer_assignment};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

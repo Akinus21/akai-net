@@ -1,5 +1,7 @@
+mod pipeline;
+
 use anyhow::Result;
-use crate::pipeline::{HubMessage, WorkerInfo};
+use pipeline::{HubMessage, WorkerInfo};
 use std::env;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
