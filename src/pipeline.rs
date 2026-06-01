@@ -12,6 +12,10 @@ pub struct WorkerInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HubMessage {
     Register(WorkerInfo),
+    LayerAssignment {
+        layer_offset: usize,
+        num_layers: usize,
+    },
     InferenceRequest(InferenceRequest),
     InferenceResponse(InferenceResponse),
     Heartbeat {

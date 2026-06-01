@@ -99,24 +99,53 @@ async fn handle_worker_connection(
     match message {
         HubMessage::Register(info) => {
             info!(
-                "Worker registered: {} (layers {} to {}, GPU: {})",
+                "Worker registered: {} (GPU: {}, VRAM: {:.1} GB)",
                 info.id,
-                info.layer_offset,
-                info.layer_offset + info.num_layers,
-                info.has_gpu
+                info.has_gpu,
+                info.vram_gb
             );
 
-            let mut workers_guard = workers.write().await;
-            workers_guard.insert(info.id.clone(), WorkerConnection { stream, info });
-            drop(workers_guard);
+            // Store worker with placeholder layer offset (hub will assign)
+            let worker_stream = stream;
+            {
+                let mut workers_guard = workers.write().await;
+                workers_guard.insert(info.id.clone(), WorkerConnection {
+                    stream: worker_stream.try_clone().await?,
+                    info: info.clone(),
+                });
+            }
 
+            // Calculate layer assignments for all workers
             let assignments = {
                 let workers_guard = workers.read().await;
                 let worker_list: Vec<_> = workers_guard.values().map(|w| w.info.clone()).collect();
                 calculate_layer_assignment(&worker_list, _model.num_layers)
             };
 
-            info!("Current pipeline assignments: {:?}", assignments);
+            info!("Layer assignments: {:?}", assignments);
+
+            // Send each worker their assignment
+            {
+                let mut workers_guard = workers.write().await;
+                for (worker_id, layer_offset, num_layers) in &assignments {
+                    if let Some(conn) = workers_guard.get_mut(worker_id) {
+                        let msg = HubMessage::LayerAssignment {
+                            layer_offset: *layer_offset,
+                            num_layers: *num_layers,
+                        };
+                        let data = serde_json::to_vec(&msg)?;
+                        if let Err(e) = conn.stream.write_all(&data).await {
+                            error!("Failed to send assignment to {}: {}", worker_id, e);
+                        } else {
+                            info!("Sent assignment to {}: layers {} to {}",
+                                worker_id, layer_offset, layer_offset + num_layers);
+                            conn.info.layer_offset = *layer_offset;
+                            conn.info.num_layers = *num_layers;
+                        }
+                    }
+                }
+            }
+
             Ok(())
         }
         HubMessage::Heartbeat { worker_id, load, active } => {
