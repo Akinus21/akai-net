@@ -9,12 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn, error};
 
-type WorkerMap = Arc<RwLock<HashMap<String, WorkerConnection>>>;
-
-struct WorkerConnection {
-    stream: Arc<TcpStream>,
-    info: WorkerInfo,
-}
+type WorkerMap = Arc<RwLock<HashMap<String, WorkerInfo>>>;
 
 struct HubState {
     model: ModelConfig,
@@ -133,18 +128,16 @@ async fn handle_worker_connection(
                 info.vram_gb
             );
 
+            // Insert worker info
             {
                 let mut workers_guard = workers.write().await;
-                workers_guard.insert(info.id.clone(), WorkerConnection {
-                    stream: Arc::new(stream.try_clone()?),
-                    info: info.clone(),
-                });
+                workers_guard.insert(info.id.clone(), info.clone());
             }
 
             // Recalculate assignments
             let (layer_offset, num_layers) = {
                 let workers_guard = workers.read().await;
-                let worker_list: Vec<_> = workers_guard.values().map(|w| w.info.clone()).collect();
+                let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                 let state_guard = state.lock().await;
                 let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
                 assignments.iter()
@@ -157,8 +150,8 @@ async fn handle_worker_connection(
             {
                 let mut workers_guard = workers.write().await;
                 if let Some(conn) = workers_guard.get_mut(&info.id) {
-                    conn.info.layer_offset = layer_offset;
-                    conn.info.num_layers = num_layers;
+                    conn.layer_offset = layer_offset;
+                    conn.num_layers = num_layers;
                 }
             }
 
@@ -180,20 +173,20 @@ async fn handle_worker_connection(
         HubMessage::Heartbeat(hb) => {
             let (layer_offset, num_layers, reassign) = {
                 let workers_guard = workers.read().await;
-                let worker_list: Vec<_> = workers_guard.values().map(|w| w.info.clone()).collect();
+                let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                 let state_guard = state.lock().await;
                 let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
 
                 // Check if this worker needs reassignment
                 if let Some(current) = workers_guard.get(&hb.worker_id) {
-                    if current.info.layer_offset != hb.layer_offset || current.info.num_layers != hb.num_layers {
+                    if current.layer_offset != hb.layer_offset || current.num_layers != hb.num_layers {
                         // Worker has old assignment, needs reassignment
                         if let Some((_, offset, layers)) = assignments.iter().find(|(id, _, _)| id == &hb.worker_id) {
                             // Update worker info
                             let mut workers_guard = workers.write().await;
                             if let Some(conn) = workers_guard.get_mut(&hb.worker_id) {
-                                conn.info.layer_offset = *offset;
-                                conn.info.num_layers = *layers;
+                                conn.layer_offset = *offset;
+                                conn.num_layers = *layers;
                             }
                             (Some(*offset), Some(*layers), true)
                         } else {
@@ -228,10 +221,10 @@ async fn handle_worker_connection(
             {
                 let mut workers_guard = workers.write().await;
                 if let Some(conn) = workers_guard.get_mut(&hb.worker_id) {
-                    conn.info.load = hb.load;
-                    conn.info.has_gpu = hb.has_gpu;
-                    conn.info.vram_gb = hb.vram_gb;
-                    conn.info.active = hb.active;
+                    conn.load = hb.load;
+                    conn.has_gpu = hb.has_gpu;
+                    conn.vram_gb = hb.vram_gb;
+                    conn.active = hb.active;
                 }
             }
 
@@ -284,11 +277,11 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                         .values()
                         .map(|w| {
                             serde_json::json!({
-                                "id": w.info.id,
-                                "layers": format!("{}-{}", w.info.layer_offset, w.info.layer_offset + w.info.num_layers),
-                                "gpu": w.info.has_gpu,
-                                "vram_gb": w.info.vram_gb,
-                                "load": w.info.load,
+                                "id": w.id,
+                                "layers": format!("{}-{}", w.layer_offset, w.layer_offset + w.num_layers),
+                                "gpu": w.has_gpu,
+                                "vram_gb": w.vram_gb,
+                                "load": w.load,
                             })
                         })
                         .collect();
