@@ -1,41 +1,29 @@
-FROM ubuntu:22.04 AS builder
-
-ARG LLAMACPP_VERSION=a8681a0
-
-RUN apt-get update -q && apt-get install -yq \
-    git cmake make g++ curl ca-certificates \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-RUN git clone https://github.com/ggml-org/llama.cpp . \
-    && git checkout $LLAMACPP_VERSION
-
-RUN cmake -B build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DGGML_RPC=ON \
-      -DGGML_AVX512=OFF \
-      -DGGML_AVX512_VBMI=OFF \
-      -DGGML_AVX512_VNNI=OFF \
-      -DBUILD_SHARED_LIBS=OFF \
-      -DLLAMA_CURL=ON \
-      -DCMAKE_C_FLAGS="-mno-avx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl" \
-      -DCMAKE_CXX_FLAGS="-mno-avx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl" \
-    && cmake --build build --config Release -j$(nproc) \
-         --target llama-server
-
 FROM ubuntu:22.04
 
 RUN apt-get update -q && apt-get install -yq \
-    libgomp1 curl ca-certificates jq python3 \
+    libgomp1 curl ca-certificates jq python3 python3-pip python3-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
-COPY entrypoint.sh /entrypoint.sh
+# Install PyTorch CPU (hub does no inference, but Petals client needs it)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install Petals and dependencies
+RUN pip install --no-cache-dir \
+    petals \
+    transformers>=4.36.0 \
+    accelerate>=0.25.0
+
+COPY pipeline_hub.py /app/pipeline_hub.py
 COPY healthd.py /app/healthd.py
 COPY switch-model.sh /usr/local/bin/switch-model
-RUN chmod +x /entrypoint.sh /usr/local/bin/switch-model
+RUN chmod +x /app/pipeline_hub.py /usr/local/bin/switch-model
+
+ENV PYTHONUNBUFFERED=1
+ENV QUEUE_URL=http://ollama-queue:8000
+ENV TUNNEL_HOST=tunnel.akinus21.com
+ENV TUNNEL_PORT=443
 
 VOLUME ["/models"]
 EXPOSE 8080 8081
 
-ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python3", "-u", "/app/pipeline_hub.py"]
