@@ -4,16 +4,10 @@ RUN apt-get update -q && apt-get install -yq \
     libgomp1 curl ca-certificates jq python3 python3-pip python3-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch CPU first (hub does no inference, but Petals client needs it)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# Install aiohttp for the hub server
+RUN pip install --no-cache-dir aiohttp
 
-# Install transformers first (petals depends on it)
-RUN pip install --no-cache-dir transformers>=4.36.0
-
-# Install accelerate
-RUN pip install --no-cache-dir accelerate>=0.25.0
-
-# Install petals separately (last due to dependency issues)
+# Install Petals (includes transformers, accelerate, torch as dependencies)
 RUN pip install --no-cache-dir petals
 
 COPY pipeline_hub.py /app/pipeline_hub.py
