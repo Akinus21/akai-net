@@ -114,7 +114,7 @@ build_args() {
         --port     "$SERVER_PORT"
         --ctx-size "$CTX_SIZE"
         --timeout  600
-        -ngl       99
+        -ngl       0
         -fit       off
     )
     if [ -n "$rpc_string" ]; then

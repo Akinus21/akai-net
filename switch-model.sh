@@ -123,11 +123,37 @@ OLD_FILE=$(grep "^AKAI_MODEL_FILENAME=" "$SECRETS_FILE" 2>/dev/null | cut -d= -f
 
 update_secret "AKAI_MODEL_FILENAME" "$(basename "$MODEL_PATH")"
 update_secret "AKAI_MODEL_ALIAS"    "$ALIAS"
+update_secret "AKAI_MODEL_NAME"    "$ALIAS"
 update_secret "AKAI_CTX_SIZE"      "$CTX_SIZE"
 echo "✓ Updated .secrets"
 echo "    AKAI_MODEL_FILENAME=$(basename "$MODEL_PATH")"
 echo "    AKAI_MODEL_ALIAS=$ALIAS"
+echo "    AKAI_MODEL_NAME=$ALIAS"
 echo "    AKAI_CTX_SIZE=$CTX_SIZE"
+
+ENV_FILE="/models/.env"
+if [ -d "/models" ]; then
+    if [ -f "$ENV_FILE" ]; then
+        if grep -q "^AKAI_MODEL_NAME=" "$ENV_FILE"; then
+            sed -i "s/^AKAI_MODEL_NAME=.*/AKAI_MODEL_NAME=$ALIAS/" "$ENV_FILE"
+        else
+            echo "AKAI_MODEL_NAME=$ALIAS" >> "$ENV_FILE"
+        fi
+    else
+        echo "AKAI_MODEL_NAME=$ALIAS" > "$ENV_FILE"
+    fi
+    echo "✓ Updated $ENV_FILE with AKAI_MODEL_NAME=$ALIAS"
+fi
+
+QUEUE_SECRETS="/models/queue-secrets.env"
+if [ -f "$QUEUE_SECRETS" ]; then
+    if grep -q "^AKAI_MODEL_NAME=" "$QUEUE_SECRETS"; then
+        sed -i "s/^AKAI_MODEL_NAME=.*/AKAI_MODEL_NAME=$ALIAS/" "$QUEUE_SECRETS"
+    else
+        echo "AKAI_MODEL_NAME=$ALIAS" >> "$QUEUE_SECRETS"
+    fi
+    echo "✓ Updated queue-secrets.env"
+fi
 
 if [ -n "$OLD_FILE" ] && [ "$OLD_FILE" != "$(basename "$MODEL_PATH")" ] && [ -f "$MODELS_DIR/$OLD_FILE" ]; then
     echo "→ Removing old model: $OLD_FILE ($(du -sh "$MODELS_DIR/$OLD_FILE" | cut -f1))"
