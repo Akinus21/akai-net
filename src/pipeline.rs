@@ -7,6 +7,8 @@ pub struct WorkerInfo {
     pub num_layers: usize,
     pub vram_gb: f32,
     pub has_gpu: bool,
+    #[serde(default)]
+    pub load: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
