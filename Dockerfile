@@ -4,10 +4,13 @@ RUN apt-get update -q && apt-get install -yq \
     libgomp1 curl ca-certificates jq python3 python3-pip python3-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install torch FIRST with a compatible version for Petals/hivemind
+RUN pip install --no-cache-dir torch==2.0.1 --index-url https://download.pytorch.org/whl/cpu
+
 # Install aiohttp and httpx for the hub server
 RUN pip install --no-cache-dir aiohttp httpx
 
-# Install Petals (includes transformers, accelerate, torch as dependencies)
+# Install Petals (should use the older torch we installed)
 RUN pip install --no-cache-dir petals
 
 COPY pipeline_hub.py /app/pipeline_hub.py
