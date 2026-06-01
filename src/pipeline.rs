@@ -10,23 +10,43 @@ pub struct WorkerInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum HubMessage {
+    #[serde(rename = "register")]
     Register(WorkerInfo),
-    LayerAssignment {
-        layer_offset: usize,
-        num_layers: usize,
-    },
+    #[serde(rename = "inference_request")]
     InferenceRequest(InferenceRequest),
+    #[serde(rename = "inference_response")]
     InferenceResponse(InferenceResponse),
-    Heartbeat {
-        worker_id: String,
-        load: f32,
-        active: bool,
-    },
+    #[serde(rename = "heartbeat")]
+    Heartbeat(WorkerHeartbeat),
+    #[serde(rename = "heartbeat_response")]
+    HeartbeatResponse(HeartbeatResponse),
+    #[serde(rename = "error")]
     Error {
         code: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerHeartbeat {
+    pub worker_id: String,
+    pub load: f32,
+    pub layer_offset: usize,
+    pub num_layers: usize,
+    pub has_gpu: bool,
+    pub vram_gb: f32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatResponse {
+    pub layer_offset: usize,
+    pub num_layers: usize,
+    pub reassign: bool,
+    pub model_name: String,
+    pub model_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
