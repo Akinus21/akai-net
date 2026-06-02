@@ -1,7 +1,7 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment, build_pipeline_info, PipelineInfo};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment, build_pipeline_info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -12,7 +12,7 @@ use tracing::{info, warn, error};
 use std::net::SocketAddr;
 
 type WorkerMap = Arc<RwLock<HashMap<String, WorkerInfo>>>;
-type WorkerStreams = Arc<RwLock<HashMap<String, Arc<Mutex<TcpStream>>>>>;
+type WorkerAddrs = Arc<RwLock<HashMap<String, SocketAddr>>>;
 
 struct HubState {
     model: ModelConfig,
@@ -60,11 +60,11 @@ async fn main() -> Result<()> {
     info!("Worker protocol: 0.0.0.0:{}", worker_port);
 
     let workers: WorkerMap = Arc::new(RwLock::new(HashMap::new()));
-    let worker_streams: WorkerStreams = Arc::new(RwLock::new(HashMap::new()));
+    let worker_addrs: WorkerAddrs = Arc::new(RwLock::new(HashMap::new()));
 
     // Worker protocol server
     let worker_workers = workers.clone();
-    let worker_streams_clone = worker_streams.clone();
+    let worker_addrs_clone = worker_addrs.clone();
     let worker_state = state.clone();
     tokio::spawn(async move {
         let listener = match TcpListener::bind(format!("0.0.0.0:{}", worker_port)).await {
@@ -80,10 +80,10 @@ async fn main() -> Result<()> {
             match listener.accept().await {
                 Ok((stream, addr)) => {
                     let workers = worker_workers.clone();
-                    let streams = worker_streams_clone.clone();
+                    let addrs = worker_addrs_clone.clone();
                     let state = worker_state.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state).await {
+                        if let Err(e) = handle_worker_connection(stream, addr, workers, addrs, state).await {
                             error!("Worker connection error: {}", e);
                         }
                     });
@@ -96,11 +96,11 @@ async fn main() -> Result<()> {
     // Start heartbeat cascade timer (every 30 seconds)
     let hb_workers = workers.clone();
     let hb_state = state.clone();
-    let hb_streams = worker_streams.clone();
+    let hb_addrs = worker_addrs.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
-            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams).await {
+            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_addrs).await {
                 warn!("Heartbeat cascade failed: {}", e);
             }
         }
@@ -131,21 +131,21 @@ async fn main() -> Result<()> {
 async fn initiate_heartbeat_cascade(
     workers: &WorkerMap,
     state: &HubStateRef,
-    streams: &WorkerStreams,
+    addrs: &WorkerAddrs,
 ) -> Result<()> {
     let pipeline = {
         let workers_guard = workers.read().await;
         let state_guard = state.lock().await;
         let worker_list: Vec<_> = workers_guard.values().cloned().collect();
-        let stream_count = streams.read().await.len();
+        let addr_count = addrs.read().await.len();
         
         if worker_list.is_empty() {
             info!("Cascade: no workers registered");
             return Ok(());
         }
         
-        if stream_count == 0 {
-            info!("Cascade: no worker streams stored yet");
+        if addr_count == 0 {
+            info!("Cascade: no worker addresses stored yet");
             return Ok(());
         }
         
@@ -155,24 +155,31 @@ async fn initiate_heartbeat_cascade(
             &state_guard.model_url,
             state_guard.model.num_layers,
         );
-        info!("Cascade: {} workers, {} streams, first={}", 
-              worker_list.len(), stream_count,
+        info!("Cascade: {} workers, {} addrs, first={}", 
+              worker_list.len(), addr_count,
               pipeline.workers.first().map(|w| w.worker_id.as_str()).unwrap_or("none"));
         pipeline
     };
 
-    // Send HeartbeatForward to first worker via stored stream
+    // Send HeartbeatForward to first worker by connecting
     let first_worker = pipeline.workers.first();
     if let Some(first) = first_worker {
-        let streams_guard = streams.read().await;
-        if let Some(stream_arc) = streams_guard.get(&first.worker_id) {
-            let mut stream = stream_arc.lock().await;
-            let msg = HubMessage::HeartbeatForward { pipeline: pipeline.clone() };
-            let data = serde_json::to_vec(&msg)?;
-            stream.write_all(&data).await?;
-            info!("HeartbeatForward sent to {} via stored stream", first.worker_id);
+        let addrs_guard = addrs.read().await;
+        if let Some(&addr) = addrs_guard.get(&first.worker_id) {
+            info!("Connecting to first worker {} at {}", first.worker_id, addr);
+            match TcpStream::connect(addr).await {
+                Ok(mut stream) => {
+                    let msg = HubMessage::HeartbeatForward { pipeline: pipeline.clone() };
+                    let data = serde_json::to_vec(&msg)?;
+                    stream.write_all(&data).await?;
+                    info!("HeartbeatForward sent to {}", first.worker_id);
+                }
+                Err(e) => {
+                    warn!("Failed to connect to first worker {}: {}", first.worker_id, e);
+                }
+            }
         } else {
-            warn!("First worker {} stream not found", first.worker_id);
+            warn!("First worker {} not in address map", first.worker_id);
         }
     }
 
@@ -183,7 +190,7 @@ async fn handle_worker_connection(
     mut stream: TcpStream,
     addr: SocketAddr,
     workers: WorkerMap,
-    streams: WorkerStreams,
+    addrs: WorkerAddrs,
     state: HubStateRef,
 ) -> Result<()> {
     let mut registered_id = None;
@@ -261,10 +268,10 @@ async fn handle_worker_connection(
 
             info!("Sent initial assignment to {}: layers {} to {}", info.id, layer_offset, layer_offset + num_layers);
             
-            // Store worker stream for cascade
+            // Store worker address for cascade
             {
-                let mut streams_guard = streams.write().await;
-                streams_guard.insert(info.id.clone(), Arc::new(Mutex::new(stream.try_clone().await?)));
+                let mut addrs_guard = addrs.write().await;
+                addrs_guard.insert(info.id.clone(), addr);
             }
             
             registered_id = Some(info.id.clone());
@@ -366,7 +373,7 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                 let path = lines.first().unwrap_or(&"");
 
                 // Extract auth header
-                let auth_key = lines.iter()
+                let _auth_key = lines.iter()
                     .find(|l| l.to_lowercase().starts_with("authorization: bearer "))
                     .map(|l| l.trim_start_matches("Authorization: Bearer ").trim())
                     .unwrap_or("");
