@@ -431,15 +431,42 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                             (400, r#"{"error":"invalid request body"}"#.to_string())
                         }
                     }
+                } else if path.starts_with("POST /auth/login") {
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(json) => {
+                            let username = json["username"].as_str().unwrap_or("").to_string();
+                            info!("Auth login attempt for: {}", username);
+                            
+                            // Check if username is authorized
+                            let authorized = admin_users.iter().any(|u| u == &username.to_lowercase());
+                            if !authorized {
+                                info!("Auth rejected: user '{}' not in admin list", username);
+                                (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else {
+                                // For now, auto-approve if user is authorized
+                                // TODO: Integrate with Duo for real 2FA
+                                info!("Auth approved for: {}", username);
+                                let resp = serde_json::json!({
+                                    "status": "approved",
+                                    "username": username,
+                                    "token": format!("token-{}", rand::random::<u64>())
+                                });
+                                (200, serde_json::to_string(&resp).unwrap_or_default())
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to parse auth request: {}", e);
+                            (400, r#"{"error":"invalid request body"}"#.to_string())
+                        }
+                    }
                 } else if path.starts_with("POST /admin/model") {
-                    // No admin key required - authenticated user handled by queue
-                    // Just check if username is in authorized list
+                    // Check username in authorized list
                     match serde_json::from_str::<serde_json::Value>(body) {
                         Ok(json) => {
                             let username = json["username"].as_str()
                                 .unwrap_or("")
                                 .to_lowercase();
-                            let authorized = admin_users.is_empty() || admin_users.iter().any(|u| u == &username);
+                            let authorized = admin_users.iter().any(|u| u == &username);
                             if !authorized {
                                 info!("Model change rejected: user '{}' not authorized", username);
                                 (403, r#"{"error":"user not authorized"}"#.to_string())
