@@ -42,6 +42,8 @@ pub enum HubMessage {
     HeartbeatResponse(HeartbeatResponse),
     #[serde(rename = "pipeline_info")]
     PipelineInfo(PipelineInfo),
+    #[serde(rename = "heartbeat_forward")]
+    HeartbeatForward { pipeline: PipelineInfo },
     #[serde(rename = "error")]
     Error {
         code: String,
