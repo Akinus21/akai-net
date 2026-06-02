@@ -38,6 +38,8 @@ async fn main() -> Result<()> {
     let hub_port: u16 = std::env::var("HUB_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080);
     let worker_port: u16 = std::env::var("WORKER_PORT").unwrap_or_else(|_| "50051".to_string()).parse().unwrap_or(50051);
     let admin_users = parse_admin_users();
+    let queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
+    let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
 
     info!("Admin users: {}", admin_users.join(", "));
 
@@ -110,10 +112,19 @@ async fn main() -> Result<()> {
         start_http_server(hub_port, http_workers, http_state, admin_users).await
     });
 
-    // Keep main task alive
-    tokio::signal::ctrl_c().await.ok();
-    info!("Hub shutting down");
-    Ok(())
+    // Keep connection to queue alive
+    let queue_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(25)).await;
+            info!("Queue keepalive ping from hub {}", hub_id);
+        }
+    });
+
+    // Keep main task alive - no ctrl_c, run forever
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
 }
 
 async fn initiate_heartbeat_cascade(
