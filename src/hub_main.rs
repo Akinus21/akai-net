@@ -136,29 +136,41 @@ async fn initiate_heartbeat_cascade(
         let workers_guard = workers.read().await;
         let state_guard = state.lock().await;
         let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+        let addr_count = addrs.read().await.len();
+        
         if worker_list.is_empty() {
+            info!("Cascade: no workers registered");
             return Ok(());
         }
-        build_pipeline_info(
+        
+        if addr_count == 0 {
+            info!("Cascade: no worker addresses stored yet");
+            return Ok(());
+        }
+        
+        let pipeline = build_pipeline_info(
             &worker_list,
             &state_guard.model.name,
             &state_guard.model_url,
             state_guard.model.num_layers,
-        )
+        );
+        info!("Cascade: {} workers, {} addrs, first={}", 
+              worker_list.len(), addr_count,
+              pipeline.workers.first().map(|w| w.worker_id.as_str()).unwrap_or("none"));
+        pipeline
     };
 
-    let first_worker = pipeline.workers.iter().find(|w| w.is_first);
+    let first_worker = pipeline.workers.first();
     if let Some(first) = first_worker {
-        info!("Initiating heartbeat cascade to first worker: {}", first.worker_id);
-        
         let addrs_guard = addrs.read().await;
         if let Some(&addr) = addrs_guard.get(&first.worker_id) {
+            info!("Connecting to first worker {} at {}", first.worker_id, addr);
             match TcpStream::connect(addr).await {
                 Ok(mut stream) => {
                     let msg = HubMessage::HeartbeatForward { pipeline: pipeline.clone() };
                     let data = serde_json::to_vec(&msg)?;
                     stream.write_all(&data).await?;
-                    info!("Heartbeat forward sent to {}", first.worker_id);
+                    info!("HeartbeatForward sent to {}", first.worker_id);
                 }
                 Err(e) => {
                     warn!("Failed to connect to first worker {}: {}", first.worker_id, e);
