@@ -459,15 +459,42 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                     );
                     (200, serde_json::to_string(&pipeline).unwrap_or_default())
                 } else if path.starts_with("POST /v1/chat/completions") {
-                    let resp = serde_json::json!({
-                        "choices": [{
-                            "message": {
-                                "role": "assistant",
-                                "content": "Pipeline hub ready. Awaiting worker connections.",
-                            }
-                        }]
-                    });
-                    (200, serde_json::to_string(&resp).unwrap_or_default())
+                    // Parse incoming chat request
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(json) => {
+                            let model = json["model"].as_str().unwrap_or("unknown");
+                            let messages = json["messages"].as_array().cloned().unwrap_or_default();
+                            
+                            info!("Chat completion request: model={}, messages={}", model, messages.len());
+                            
+                            // TODO: Route to workers for distributed inference
+                            // For now, return that pipeline is processing
+                            let resp = serde_json::json!({
+                                "id": format!("chatcmpl-{}", rand::random::<u64>()),
+                                "object": "chat.completion",
+                                "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                                "model": model,
+                                "choices": [{
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "Pipeline processing request. Workers will handle distributed inference.",
+                                    },
+                                    "finish_reason": "stop"
+                                }],
+                                "usage": {
+                                    "prompt_tokens": 0,
+                                    "completion_tokens": 0,
+                                    "total_tokens": 0
+                                }
+                            });
+                            (200, serde_json::to_string(&resp).unwrap_or_default())
+                        }
+                        Err(e) => {
+                            error!("Failed to parse chat request: {}", e);
+                            (400, r#"{"error":"invalid request body"}"#.to_string())
+                        }
+                    }
                 } else if path.starts_with("POST /v1/completions") {
                     let resp = serde_json::json!({
                         "choices": [{
