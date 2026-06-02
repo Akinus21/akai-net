@@ -297,14 +297,30 @@ async fn handle_worker_connection(
                 info!("Pipeline heartbeat cascade complete - all workers responding");
             }
             
-            // Send acknowledgment
+            // Send acknowledgment with pipeline info
+            let pipeline = {
+                let workers_guard = workers.read().await;
+                let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                let state_guard = state.lock().await;
+                if worker_list.is_empty() {
+                    None
+                } else {
+                    Some(build_pipeline_info(
+                        &worker_list,
+                        &state_guard.model.name,
+                        &state_guard.model_url,
+                        state_guard.model.num_layers,
+                    ))
+                }
+            };
+            
             let response = HeartbeatResponse {
                 layer_offset: hb.layer_offset,
                 num_layers: hb.num_layers,
                 reassign: false,
                 model_name: state.lock().await.model.name.clone(),
                 model_url: state.lock().await.model_url.clone(),
-                pipeline: None,
+                pipeline,
             };
             let msg = HubMessage::HeartbeatResponse(response);
             let data = serde_json::to_vec(&msg)?;
