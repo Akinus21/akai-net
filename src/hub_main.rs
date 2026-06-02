@@ -438,6 +438,37 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                             (400, r#"{"error":"invalid request body"}"#.to_string())
                         }
                     }
+                } else if path.starts_with("POST /auth/register") {
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(json) => {
+                            let username = json["username"].as_str().unwrap_or("").to_string();
+                            let worker_name = json["worker_name"].as_str().unwrap_or("").to_string();
+                            
+                            info!("Auth register: user={}, worker={}", username, worker_name);
+                            
+                            // Check if username is authorized
+                            let authorized = admin_users.iter().any(|u| u == &username.to_lowercase());
+                            if !authorized {
+                                info!("Auth register rejected: user '{}' not authorized", username);
+                                (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else {
+                                // Auto-approve for now - TODO: integrate with Duo
+                                info!("Auth register approved for: {}", username);
+                                let resp = serde_json::json!({
+                                    "status": "provisioned",
+                                    "username": username,
+                                    "worker_id": format!("{}:{}", username, worker_name),
+                                    "wg_ip": format!("10.8.0.{}", rand::random::<u8>() % 200 + 2),
+                                    "rpc_port": 50052
+                                });
+                                (200, serde_json::to_string(&resp).unwrap_or_default())
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to parse auth register: {}", e);
+                            (400, r#"{"error":"invalid request body"}"#.to_string())
+                        }
+                    }
                 } else if path.starts_with("POST /auth/login") {
                     match serde_json::from_str::<serde_json::Value>(body) {
                         Ok(json) => {
