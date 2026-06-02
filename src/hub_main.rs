@@ -410,6 +410,27 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                         }]
                     });
                     (200, serde_json::to_string(&resp).unwrap_or_default())
+                } else if path.starts_with("POST /workers/register") {
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(json) => {
+                            let worker_id = json["id"].as_str().unwrap_or("").to_string();
+                            let gpu = json["gpu"].as_bool().unwrap_or(false);
+                            let vram_gb = json["vram_gb"].as_f64().unwrap_or(0.0) as f32;
+                            
+                            info!("Worker registration request: id={}, gpu={}, vram={}GB", worker_id, gpu, vram_gb);
+                            
+                            let resp = serde_json::json!({
+                                "status": "registered",
+                                "worker_id": worker_id,
+                                "message": "Worker registered successfully"
+                            });
+                            (200, serde_json::to_string(&resp).unwrap_or_default())
+                        }
+                        Err(e) => {
+                            error!("Failed to parse worker registration: {}", e);
+                            (400, r#"{"error":"invalid request body"}"#.to_string())
+                        }
+                    }
                 } else if path.starts_with("POST /admin/model") {
                     // No admin key required - authenticated user handled by queue
                     // Just check if username is in authorized list
