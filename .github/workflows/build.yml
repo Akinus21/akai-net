@@ -72,8 +72,8 @@ jobs:
           git remote set-url origin \
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           TAG="${{ steps.tag.outputs.new_tag }}"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
+          git tag -a "$TAG" -m "Release $TAG" -f
+          git push origin "$TAG" -f
           gh release create "$TAG" \
             --title "$TAG" \
             --notes "Docker image: \`ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}\`"
