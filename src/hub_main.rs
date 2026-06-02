@@ -1,7 +1,7 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment, build_pipeline_info, PipelineInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -154,13 +154,23 @@ async fn handle_worker_connection(
                 }
             }
 
-            // Send heartbeat response with assignment
+            // Build pipeline info to broadcast
+            let (model_name, model_url, num_layers_total) = {
+                let state_guard = state.lock().await;
+                (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
+            };
+            let workers_guard = workers.read().await;
+            let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+            let pipeline = build_pipeline_info(&worker_list, &model_name, &model_url, num_layers_total);
+
+            // Send heartbeat response with assignment + pipeline
             let response = HeartbeatResponse {
                 layer_offset,
                 num_layers,
                 reassign: false,
-                model_name: state.lock().await.model.name.clone(),
-                model_url: state.lock().await.model_url.clone(),
+                model_name,
+                model_url,
+                pipeline: Some(pipeline),
             };
             let msg = HubMessage::HeartbeatResponse(response);
             let data = serde_json::to_vec(&msg)?;
@@ -170,14 +180,14 @@ async fn handle_worker_connection(
             Ok(())
         }
         HubMessage::Heartbeat(hb) => {
-            let (layer_offset, num_layers, reassign) = {
+            let (layer_offset, num_layers, reassign, pipeline) = {
                 let workers_guard = workers.read().await;
                 let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                 let state_guard = state.lock().await;
                 let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
 
                 // Check if this worker needs reassignment
-                if let Some(current) = workers_guard.get(&hb.worker_id) {
+                let reassign = if let Some(current) = workers_guard.get(&hb.worker_id) {
                     if current.layer_offset != hb.layer_offset || current.num_layers != hb.num_layers {
                         // Worker has old assignment, needs reassignment
                         if let Some((_, offset, layers)) = assignments.iter().find(|(id, _, _)| id == &hb.worker_id) {
@@ -196,10 +206,20 @@ async fn handle_worker_connection(
                     }
                 } else {
                     (None, None, false)
-                }
+                };
+
+                // Build pipeline for response
+                let pipeline = build_pipeline_info(
+                    &worker_list,
+                    &state_guard.model.name,
+                    &state_guard.model_url,
+                    state_guard.model.num_layers,
+                );
+
+                (reassign.0, reassign.1, reassign.2, Some(pipeline))
             };
 
-            // Get model info
+            // Get model info for fallback
             let (model_name, model_url) = {
                 let state_guard = state.lock().await;
                 (state_guard.model.name.clone(), state_guard.model_url.clone())
@@ -211,6 +231,7 @@ async fn handle_worker_connection(
                 reassign,
                 model_name,
                 model_url,
+                pipeline,
             };
             let msg = HubMessage::HeartbeatResponse(response);
             let data = serde_json::to_vec(&msg)?;
@@ -341,6 +362,17 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                             (400, r#"{"error":"invalid request body"}"#.to_string())
                         }
                     }
+                } else if path.starts_with("GET /pipeline/status") {
+                    // Return current pipeline registry for monitoring
+                    let workers_guard = workers.read().await;
+                    let state_guard = state.lock().await;
+                    let pipeline = build_pipeline_info(
+                        &workers_guard.values().cloned().collect::<Vec<_>>(),
+                        &state_guard.model.name,
+                        &state_guard.model_url,
+                        state_guard.model.num_layers,
+                    );
+                    (200, serde_json::to_string(&pipeline).unwrap_or_default())
                 } else if path.starts_with("POST /v1/chat/completions") {
                     let resp = serde_json::json!({
                         "choices": [{
