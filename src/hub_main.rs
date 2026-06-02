@@ -1,7 +1,7 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, Heartbeat, calculate_layer_assignment, build_pipeline_info, PipelineInfo};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment, build_pipeline_info, PipelineInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         info!("Worker protocol server listening on 0.0.0.0:{}", worker_port);
 
         loop {
-            match listener.accept().await::<TcpStream>() {
+            match listener.accept().await {
                 Ok((stream, addr)) => {
                     let workers = worker_workers.clone();
                     let streams = worker_streams_clone.clone();
@@ -238,11 +238,6 @@ async fn handle_worker_connection(
 
             info!("Sent initial assignment to {}: layers {} to {}", info.id, layer_offset, layer_offset + num_layers);
             
-            // Store worker's stream for later use (heartbeat cascade)
-            {
-                let mut streams_guard = streams.write().await;
-                streams_guard.insert(info.id.clone(), Arc::new(Mutex::new(stream.try_clone().await?)));
-            }
             registered_id = Some(info.id.clone());
             
             Ok(())
