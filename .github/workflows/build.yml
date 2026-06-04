@@ -100,12 +100,13 @@ jobs:
             --arg image  "$IMAGE" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,tag:$tag,image:$image}')" > /tmp/webhook-payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL -X POST \
+          curl -fsSL --max-time 15 --retry 3 \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: build_success" \
             -H "X-Hub-Signature-256: $SIG" \
             --data-binary @/tmp/webhook-payload.json \
-            "https://webhook.akinus21.com/webhook/akai-net-build"
+            "https://webhook.akinus21.com/webhook/akai-net-build" || true
+          echo "Webhook notification completed"
 
       - name: Collect build logs on failure
         if: failure()
