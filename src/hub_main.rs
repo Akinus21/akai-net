@@ -193,12 +193,170 @@ async fn handle_worker_connection(
     addrs: WorkerAddrs,
     state: HubStateRef,
 ) -> Result<()> {
-    let mut registered_id = None;
     let mut buf = vec![0u8; 65536];
-    let n = stream.read(&mut buf).await?;
-    if n == 0 {
-        return Ok(());
+    
+    loop {
+        // Read message from worker (blocking read)
+        let n = stream.read(&mut buf).await?;
+        if n == 0 {
+            info!("Worker disconnected");
+            break;
+        }
+
+        let message: HubMessage = match serde_json::from_slice(&buf[..n]) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to parse worker message: {}", e);
+                continue;
+            }
+        };
+
+        match message {
+            HubMessage::Register(info) => {
+                info!(
+                    "Worker registered: {} (GPU: {}, VRAM: {:.1} GB)",
+                    info.id,
+                    info.has_gpu,
+                    info.vram_gb
+                );
+
+                // Insert worker info
+                {
+                    let mut workers_guard = workers.write().await;
+                    workers_guard.insert(info.id.clone(), info.clone());
+                    info!("Workers HashMap now has {} entries", workers_guard.len());
+                }
+
+                // Recalculate assignments
+                let (layer_offset, num_layers) = {
+                    let workers_guard = workers.read().await;
+                    let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    let state_guard = state.lock().await;
+                    let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
+                    assignments.iter()
+                        .find(|(id, _, _)| id == &info.id)
+                        .map(|(_, offset, layers)| (*offset, *layers))
+                        .unwrap_or((0, 0))
+                };
+
+                // Update worker's layer info
+                {
+                    let mut workers_guard = workers.write().await;
+                    if let Some(conn) = workers_guard.get_mut(&info.id) {
+                        conn.layer_offset = layer_offset;
+                        conn.num_layers = num_layers;
+                    }
+                }
+
+                // Build pipeline info to broadcast
+                let (model_name, model_url, num_layers_total) = {
+                    let state_guard = state.lock().await;
+                    (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
+                };
+                let workers_guard = workers.read().await;
+                let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                let pipeline = build_pipeline_info(&worker_list, &model_name, &model_url, num_layers_total);
+
+                // Send heartbeat response with assignment + pipeline
+                let response = HeartbeatResponse {
+                    layer_offset,
+                    num_layers,
+                    reassign: false,
+                    model_name,
+                    model_url,
+                    pipeline: Some(pipeline.clone()),
+                };
+                let msg = HubMessage::HeartbeatResponse(response);
+                let data = serde_json::to_vec(&msg)?;
+                stream.write_all(&data).await?;
+
+                info!("Sent initial assignment to {}: layers {} to {}", info.id, layer_offset, layer_offset + num_layers);
+                
+                // Store worker address for reference (may not be reachable from hub)
+                {
+                    let mut addrs_guard = addrs.write().await;
+                    addrs_guard.insert(info.id.clone(), addr);
+                }
+                
+                // Continue in loop, waiting for next message from worker
+            }
+            HubMessage::Heartbeat(hb) => {
+                // This is a heartbeat returning from a worker (end of cascade)
+                info!("Heartbeat received from {}: load={:.2}, last_hop_conn={}, next_hop_conn={}",
+                    hb.worker_id, hb.load, hb.last_hop_connected, hb.next_hop_connected);
+                
+                // Update worker info with latest capability
+                {
+                    let mut workers_guard = workers.write().await;
+                    if let Some(conn) = workers_guard.get_mut(&hb.worker_id) {
+                        conn.load = hb.load;
+                        conn.has_gpu = hb.has_gpu;
+                        conn.vram_gb = hb.vram_gb;
+                        conn.active = hb.active;
+                    }
+                }
+                
+                // Log cascade complete if last worker
+                let is_last = {
+                    let workers_guard = workers.read().await;
+                    let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    let pipeline = build_pipeline_info(
+                        &worker_list,
+                        &state.lock().await.model.name,
+                        &state.lock().await.model_url,
+                        state.lock().await.model.num_layers,
+                    );
+                    pipeline.workers.iter().any(|w| w.worker_id == hb.worker_id && w.is_last)
+                };
+                
+                if is_last {
+                    info!("Pipeline heartbeat cascade complete - all workers responding");
+                }
+                
+                // Send acknowledgment with current pipeline
+                let pipeline = {
+                    let workers_guard = workers.read().await;
+                    let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    let state_guard = state.lock().await;
+                    if worker_list.is_empty() {
+                        None
+                    } else {
+                        Some(build_pipeline_info(
+                            &worker_list,
+                            &state_guard.model.name,
+                            &state_guard.model_url,
+                            state_guard.model.num_layers,
+                        ))
+                    }
+                };
+                
+                let response = HeartbeatResponse {
+                    layer_offset: hb.layer_offset,
+                    num_layers: hb.num_layers,
+                    reassign: false,
+                    model_name: state.lock().await.model.name.clone(),
+                    model_url: state.lock().await.model_url.clone(),
+                    pipeline,
+                };
+                let msg = HubMessage::HeartbeatResponse(response);
+                let data = serde_json::to_vec(&msg)?;
+                stream.write_all(&data).await?;
+            }
+            HubMessage::HeartbeatResponse(_) => {
+                warn!("Unexpected HeartbeatResponse from worker");
+            }
+            HubMessage::InferenceResponse(resp) => {
+                info!("Inference response from {}: done={}", resp.id, resp.is_done);
+                // TODO: Handle inference response - relay to next worker or return to queue
+            }
+            _ => {
+                warn!("Unexpected message type from worker");
+            }
+        }
     }
+    
+    Ok(())
+}
 
     let message: HubMessage = match serde_json::from_slice(&buf[..n]) {
         Ok(m) => m,
@@ -221,6 +379,7 @@ async fn handle_worker_connection(
             {
                 let mut workers_guard = workers.write().await;
                 workers_guard.insert(info.id.clone(), info.clone());
+                info!("Workers HashMap now has {} entries", workers_guard.len());
             }
 
             // Recalculate assignments

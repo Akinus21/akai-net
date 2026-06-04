@@ -111,3 +111,20 @@ docker run -p 8080:8080 -p 50051:50051 \
 | Phone | Candle (Rust) | CPU only, layers 26-31 |
 
 Workers implement `HubMessage` protocol to connect. See `worker_main.rs` for reference implementation.
+
+## Infrastructure Notes
+
+### Docker Socket Access
+The agent has access to the Docker socket at `/var/run/docker.sock` to run docker commands directly.
+
+### Port Routing Architecture
+```
+Internet → Caddy (443) → akai-net:50051 (worker protocol, no direct host exposure)
+                     └→ tunnel-server:50053 (mTLS tunnel for workers)
+```
+
+- Port 50051 should **NOT** be directly exposed to host (remove `- "50051:50051"` from compose)
+- All worker traffic routes through Caddy layer4 proxy
+- akai-hub.akinus21.com uses `reverse_proxy tcp/akai-net:50051` for raw TCP passthrough
+- tunnel.akinus21.com routes to tunnel-server:50053 for mTLS tunnel workers
+- CrowdSec protection applied via `import secure` directive in Caddy
