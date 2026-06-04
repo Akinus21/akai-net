@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
     let admin_users = parse_admin_users();
     let queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
     let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
+    let _ = hub_id; // Suppress unused warning
 
     info!("Admin users: {}", admin_users.join(", "));
 
