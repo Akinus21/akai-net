@@ -1,7 +1,7 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, InferenceResponse, calculate_layer_assignment, build_pipeline_info};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, InferenceResponse, InferenceForward, calculate_layer_assignment, build_pipeline_info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -357,6 +357,25 @@ async fn handle_worker_connection(
                 {
                     let mut w = writer.lock().await;
                     w.write_all(&data).await?;
+                }
+            }
+            HubMessage::InferenceForward(fwd) => {
+                info!("Inference forward from {} to {} ({} bytes)", fwd.from_worker, fwd.to_worker, fwd.data.len());
+                let streams_guard = streams.read().await;
+                if let Some(target_writer) = streams_guard.get(&fwd.to_worker) {
+                    let msg = HubMessage::InferenceForward(fwd);
+                    match serde_json::to_vec(&msg) {
+                        Ok(data) => {
+                            let mut w = target_writer.lock().await;
+                            match w.write_all(&data).await {
+                                Ok(_) => info!("Forwarded inference data to {}", fwd.to_worker),
+                                Err(e) => warn!("Failed to forward to {}: {}", fwd.to_worker, e),
+                            }
+                        }
+                        Err(e) => warn!("Failed to serialize InferenceForward: {}", e),
+                    }
+                } else {
+                    warn!("Target worker {} not found for inference forward", fwd.to_worker);
                 }
             }
             HubMessage::HeartbeatResponse(_) => {

@@ -36,6 +36,8 @@ pub enum HubMessage {
     InferenceRequest(InferenceRequest),
     #[serde(rename = "inference_response")]
     InferenceResponse(InferenceResponse),
+    #[serde(rename = "inference_forward")]
+    InferenceForward(InferenceForward),
     #[serde(rename = "heartbeat")]
     Heartbeat(WorkerHeartbeat),
     #[serde(rename = "heartbeat_response")]
@@ -75,6 +77,14 @@ pub struct InferenceResponse {
     pub prompt_tokens: u64,
     #[serde(default)]
     pub completion_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceForward {
+    pub id: String,
+    pub from_worker: String,
+    pub to_worker: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
