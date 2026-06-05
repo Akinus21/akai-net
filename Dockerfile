@@ -7,10 +7,10 @@ RUN apt-get update -q && apt-get install -yq \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock* ./
-RUN touch src/timestamp && cargo fetch
-
 COPY src/ ./src/
-RUN rm -rf target/release/.fingerprint/akai-net-* target/release/deps/akai_net* target/release/hub 2>/dev/null; cargo build --release --bin hub
+RUN cargo fetch && rm -rf target/release/.fingerprint/akai-net-* target/release/deps/akai_net* target/release/hub 2>/dev/null || true
+
+RUN cargo build --release --bin hub
 
 FROM ubuntu:22.04
 
