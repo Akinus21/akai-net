@@ -174,7 +174,8 @@ async fn initiate_heartbeat_cascade(
             let msg = HubMessage::HeartbeatForward { pipeline: pipeline.clone() };
             let data = encode_msg(&msg)?;
 
-            match writer.write_all(&data).await {
+            let mut w = writer.lock().await;
+            match w.write_all(&data).await {
                 Ok(_) => info!("HeartbeatForward sent to {} via persistent connection", first.worker_id),
                 Err(e) => warn!("Failed to send HeartbeatForward to {}: {}", first.worker_id, e),
             }
