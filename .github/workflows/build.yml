@@ -57,8 +57,9 @@ jobs:
           tags: |
             ghcr.io/akinus21/akai-net:latest
             ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version || 'pr' }}
+          no-cache: true
           cache-from: type=gha
-          cache-to:   type=gha,mode=max
+          cache-to: type=gha,mode=max
           build-args: |
             LLAMACPP_VERSION=a8681a0
 
