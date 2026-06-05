@@ -671,7 +671,7 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                                         };
 
                                         let msg = HubMessage::InferenceRequest(req);
-                                        let data = match serde_json::to_vec(&msg) {
+                                        let data = match encode_msg(&msg) {
                                             Ok(d) => d,
                                             Err(e) => {
                                                 pending.lock().await.remove(&request_id);
@@ -777,9 +777,21 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                     (404, "{}".to_string())
                 };
 
+                let reason = match status {
+                    200 => "OK",
+                    400 => "Bad Request",
+                    403 => "Forbidden",
+                    404 => "Not Found",
+                    500 => "Internal Server Error",
+                    502 => "Bad Gateway",
+                    503 => "Service Unavailable",
+                    504 => "Gateway Timeout",
+                    _ => "OK",
+                };
                 let response = format!(
-                    "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                     status,
+                    reason,
                     resp_body.len(),
                     resp_body
                 );
