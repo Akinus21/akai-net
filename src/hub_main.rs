@@ -176,8 +176,9 @@ async fn initiate_heartbeat_cascade(
 
             let mut w = writer.lock().await;
             match w.write_all(&data).await {
-                Ok(_) => info!("HeartbeatForward sent to {} via persistent connection", first.worker_id),
-                Err(e) => warn!("Failed to send HeartbeatForward to {}: {}", first.worker_id, e),
+                Ok(_) => info!("[-> {}] HeartbeatForward: pipeline_id={}, {} workers, model={}", 
+                    first.worker_id, pipeline.pipeline_id, pipeline.workers.len(), pipeline.model_name),
+                Err(e) => warn!("[-> {}] HeartbeatForward FAILED: {}", first.worker_id, e),
             }
         } else {
             warn!("No persistent stream for first worker {}", first.worker_id);
@@ -242,12 +243,7 @@ async fn handle_worker_connection(
 
         match message {
             HubMessage::Register(info) => {
-                info!(
-                    "Worker registered: {} (GPU: {}, VRAM: {:.1} GB)",
-                    info.id,
-                    info.has_gpu,
-                    info.vram_gb
-                );
+                info!("[<- {}] Register: GPU={}, VRAM={:.1}GB", info.id, info.has_gpu, info.vram_gb);
 
                 // Store the write half for this worker so we can send messages to it
                 {
@@ -311,10 +307,11 @@ async fn handle_worker_connection(
                     w.write_all(&data).await?;
                 }
 
-                info!("Sent initial assignment to {}: layers {} to {}", info.id, layer_offset, layer_offset + num_layers);
+                info!("[-> {}] HeartbeatResponse: layers {}-{}, model={}, pipeline={}", 
+                    info.id, layer_offset, layer_offset + num_layers, model_name, pipeline.workers.len());
             }
             HubMessage::Heartbeat(hb) => {
-                info!("Heartbeat received from {}: load={:.2}, last_hop_conn={}, next_hop_conn={}",
+                info!("[<- {}] Heartbeat: load={:.2}, last_hop_conn={}, next_hop_conn={}",
                     hb.worker_id, hb.load, hb.last_hop_connected, hb.next_hop_connected);
                 
                 // Update worker info with latest capability
@@ -342,7 +339,7 @@ async fn handle_worker_connection(
                 };
                 
                 if is_last {
-                    info!("Pipeline heartbeat cascade complete - all workers responding");
+                    info!("[cascade] complete - all workers responded");
                 }
                 
                 // Send acknowledgment with current pipeline
@@ -376,16 +373,21 @@ async fn handle_worker_connection(
                     let mut w = writer.lock().await;
                     w.write_all(&data).await?;
                 }
+                if current_worker_id.as_deref() == Some(&hb.worker_id) {
+                    info!("[-> {}] HeartbeatResponse: ack with model={}, pipeline={}",
+                        hb.worker_id, hb.model_name, pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0));
+                }
             }
             HubMessage::HeartbeatResponse(_) => {
                 warn!("Unexpected HeartbeatResponse from worker");
             }
             HubMessage::InferenceResponse(resp) => {
-                info!("Inference response from worker: id={}, done={}", resp.id, resp.is_done);
+                info!("[<- worker] InferenceResponse: id={}, done={}, text={}bytes", 
+                    resp.id, resp.is_done, resp.text.as_deref().unwrap_or("").len());
                 let mut pending_guard = pending.lock().await;
                 if let Some(sender) = pending_guard.remove(&resp.id) {
                     let _ = sender.send(resp);
-                    info!("Inference response delivered to waiting HTTP handler");
+                    info!("[-> http] InferenceResponse delivered to waiting HTTP handler");
                 } else {
                     warn!("No pending inference request for id={}", resp.id);
                 }
@@ -394,7 +396,7 @@ async fn handle_worker_connection(
                 let to_worker = fwd.to_worker.clone();
                 let from_worker = fwd.from_worker.clone();
                 let data_len = fwd.data.len();
-                info!("Inference forward from {} to {} ({} bytes)", from_worker, to_worker, data_len);
+                info!("[<- {}] InferenceForward: -> {}, {} bytes", from_worker, to_worker, data_len);
                 let streams_guard = streams.read().await;
                 if let Some(target_writer) = streams_guard.get(&to_worker) {
                     let data = match encode_msg(&HubMessage::InferenceForward(fwd)) {
@@ -406,8 +408,8 @@ async fn handle_worker_connection(
                     };
                     let mut w = target_writer.lock().await;
                     match w.write_all(&data).await {
-                        Ok(_) => info!("Forwarded inference data to {}", to_worker),
-                        Err(e) => warn!("Failed to forward to {}: {}", to_worker, e),
+                        Ok(_) => info!("[-> {}] InferenceForward: forwarded {} bytes", to_worker, data_len),
+                        Err(e) => warn!("[-> {}] InferenceForward FAILED: {}", to_worker, e),
                     }
                 } else {
                     warn!("Target worker {} not found for inference forward", to_worker);
