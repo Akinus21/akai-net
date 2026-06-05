@@ -1,17 +1,18 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, calculate_layer_assignment, build_pipeline_info};
+use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, InferenceResponse, calculate_layer_assignment, build_pipeline_info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Duration;
 use tracing::{info, warn, error};
 
 type WorkerMap = Arc<RwLock<HashMap<String, WorkerInfo>>>;
 type WorkerStreams = Arc<RwLock<HashMap<String, Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>>>>;
+type PendingInferences = Arc<Mutex<HashMap<String, oneshot::Sender<InferenceResponse>>>>;
 
 struct HubState {
     model: ModelConfig,
@@ -61,11 +62,13 @@ async fn main() -> Result<()> {
 
     let workers: WorkerMap = Arc::new(RwLock::new(HashMap::new()));
     let worker_streams: WorkerStreams = Arc::new(RwLock::new(HashMap::new()));
+    let pending_inferences: PendingInferences = Arc::new(Mutex::new(HashMap::new()));
 
     // Worker protocol server
     let worker_workers = workers.clone();
     let worker_streams_clone = worker_streams.clone();
     let worker_state = state.clone();
+    let worker_pending = pending_inferences.clone();
     tokio::spawn(async move {
         let listener = match TcpListener::bind(format!("0.0.0.0:{}", worker_port)).await {
             Ok(l) => l,
@@ -82,8 +85,9 @@ async fn main() -> Result<()> {
                     let workers = worker_workers.clone();
                     let streams = worker_streams_clone.clone();
                     let state = worker_state.clone();
+                    let pending = worker_pending.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state).await {
+                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending).await {
                             error!("Worker connection error: {}", e);
                         }
                     });
@@ -109,8 +113,10 @@ async fn main() -> Result<()> {
     // HTTP API server
     let http_workers = workers.clone();
     let http_state = state.clone();
+    let http_streams = worker_streams.clone();
+    let http_pending = pending_inferences.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, http_workers, http_state, admin_users).await
+        start_http_server(hub_port, http_workers, http_state, http_streams, http_pending, admin_users).await
     });
 
     // Keep connection to queue alive
@@ -186,6 +192,7 @@ async fn handle_worker_connection(
     workers: WorkerMap,
     streams: WorkerStreams,
     state: HubStateRef,
+    pending: PendingInferences,
 ) -> Result<()> {
     let (reader, writer) = stream.into_split();
     let mut reader = reader;
@@ -356,8 +363,14 @@ async fn handle_worker_connection(
                 warn!("Unexpected HeartbeatResponse from worker");
             }
             HubMessage::InferenceResponse(resp) => {
-                info!("Inference response from {}: done={}", resp.id, resp.is_done);
-                // TODO: Handle inference response - relay to next worker or return to queue
+                info!("Inference response from worker: id={}, done={}", resp.id, resp.is_done);
+                let mut pending_guard = pending.lock().await;
+                if let Some(sender) = pending_guard.remove(&resp.id) {
+                    let _ = sender.send(resp);
+                    info!("Inference response delivered to waiting HTTP handler");
+                } else {
+                    warn!("No pending inference request for id={}", resp.id);
+                }
             }
             _ => {
                 warn!("Unexpected message type from worker");
@@ -368,7 +381,7 @@ async fn handle_worker_connection(
     Ok(())
 }
 
-async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, admin_users: Vec<String>) -> Result<()> {
+async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -560,36 +573,151 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, ad
                     );
                     (200, serde_json::to_string(&pipeline).unwrap_or_default())
                 } else if path.starts_with("POST /v1/chat/completions") {
-                    // Parse incoming chat request
                     match serde_json::from_str::<serde_json::Value>(body) {
                         Ok(json) => {
                             let model = json["model"].as_str().unwrap_or("unknown");
                             let messages = json["messages"].as_array().cloned().unwrap_or_default();
-                            
-                            info!("Chat completion request: model={}, messages={}", model, messages.len());
-                            
-                            // TODO: Route to workers for distributed inference
-                            // For now, return that pipeline is processing
-                            let resp = serde_json::json!({
-                                "id": format!("chatcmpl-{}", rand::random::<u64>()),
-                                "object": "chat.completion",
-                                "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                                "model": model,
-                                "choices": [{
-                                    "index": 0,
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": "Pipeline processing request. Workers will handle distributed inference.",
-                                    },
-                                    "finish_reason": "stop"
-                                }],
-                                "usage": {
-                                    "prompt_tokens": 0,
-                                    "completion_tokens": 0,
-                                    "total_tokens": 0
+                            let max_tokens = json["max_tokens"].as_u64().unwrap_or(128) as usize;
+                            let temperature = json["temperature"].as_f64().unwrap_or(0.7) as f32;
+
+                            info!("Chat completion request: model={}, messages={}, max_tokens={}", model, messages.len(), max_tokens);
+
+                            // Find first worker in pipeline
+                            let workers_guard = workers.read().await;
+                            let state_guard = state.lock().await;
+                            let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                            let pipeline = build_pipeline_info(
+                                &worker_list,
+                                &state_guard.model.name,
+                                &state_guard.model_url,
+                                state_guard.model.num_layers,
+                            );
+                            drop(state_guard);
+
+                            let first_worker = pipeline.workers.first();
+                            if first_worker.is_none() {
+                                drop(workers_guard);
+                                let resp = serde_json::json!({
+                                    "error": {"message": "No workers available", "type": "server_error"}
+                                });
+                                (503, serde_json::to_string(&resp).unwrap_or_default())
+                            } else if let Some(first) = first_worker {
+                                let streams_guard = streams.read().await;
+                                let writer = streams_guard.get(&first.worker_id).cloned();
+                                drop(streams_guard);
+                                drop(workers_guard);
+
+                                match writer {
+                                    Some(writer) => {
+                                        let request_id = format!("inf-{}", rand::random::<u64>());
+
+                                        let (tx, rx) = oneshot::channel();
+                                        pending.lock().await.insert(request_id.clone(), tx);
+
+                                        let prompt = messages.iter().filter_map(|m| {
+                                            m.get("content").and_then(|c| c.as_str())
+                                        }).collect::<Vec<_>>().join("\n");
+
+                                        let req = pipeline::InferenceRequest {
+                                            id: request_id.clone(),
+                                            tokens: vec![],
+                                            is_first: true,
+                                            is_last: true,
+                                            max_new_tokens: max_tokens,
+                                            temperature,
+                                            prompt: Some(prompt),
+                                        };
+
+                                        let msg = HubMessage::InferenceRequest(req);
+                                        let data = match serde_json::to_vec(&msg) {
+                                            Ok(d) => d,
+                                            Err(e) => {
+                                                pending.lock().await.remove(&request_id);
+                                                error!("Failed to serialize inference request: {}", e);
+                                                let resp = serde_json::json!({
+                                                    "error": {"message": format!("Internal error: {}", e), "type": "server_error"}
+                                                });
+                                                let body = serde_json::to_string(&resp).unwrap_or_default();
+                                                let response = format!(
+                                                    "HTTP/1.1 500 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                                    body.len(), body
+                                                );
+                                                let _ = stream.write_all(response.as_bytes()).await;
+                                                continue;
+                                            }
+                                        };
+
+                                        match {
+                                            let mut w = writer.lock().await;
+                                            w.write_all(&data).await
+                                        } {
+                                            Ok(_) => {
+                                                info!("Sent inference request {} to {}", request_id, first.worker_id);
+
+                                                match tokio::time::timeout(Duration::from_secs(120), rx).await {
+                                                    Ok(Ok(inf_resp)) => {
+                                                        let content = inf_resp.text.unwrap_or_default();
+                                                        let resp = serde_json::json!({
+                                                            "id": format!("chatcmpl-{}", rand::random::<u64>()),
+                                                            "object": "chat.completion",
+                                                            "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                                                            "model": model,
+                                                            "choices": [{
+                                                                "index": 0,
+                                                                "message": {
+                                                                    "role": "assistant",
+                                                                    "content": content,
+                                                                },
+                                                                "finish_reason": "stop"
+                                                            }],
+                                                            "usage": {
+                                                                "prompt_tokens": inf_resp.prompt_tokens,
+                                                                "completion_tokens": inf_resp.completion_tokens,
+                                                                "total_tokens": inf_resp.prompt_tokens + inf_resp.completion_tokens,
+                                                            }
+                                                        });
+                                                        (200, serde_json::to_string(&resp).unwrap_or_default())
+                                                    }
+                                                    Ok(Err(_)) => {
+                                                        error!("Inference request {} channel dropped", request_id);
+                                                        let resp = serde_json::json!({
+                                                            "error": {"message": "Worker disconnected", "type": "server_error"}
+                                                        });
+                                                        (502, serde_json::to_string(&resp).unwrap_or_default())
+                                                    }
+                                                    Err(_) => {
+                                                        error!("Inference request {} timed out", request_id);
+                                                        pending.lock().await.remove(&request_id);
+                                                        let resp = serde_json::json!({
+                                                            "error": {"message": "Request timed out", "type": "server_error"}
+                                                        });
+                                                        (504, serde_json::to_string(&resp).unwrap_or_default())
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to send inference request to worker: {}", e);
+                                                pending.lock().await.remove(&request_id);
+                                                let resp = serde_json::json!({
+                                                    "error": {"message": "Failed to send request to worker", "type": "server_error"}
+                                                });
+                                                (500, serde_json::to_string(&resp).unwrap_or_default())
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let resp = serde_json::json!({
+                                            "error": {"message": "Worker not connected", "type": "server_error"}
+                                        });
+                                        (503, serde_json::to_string(&resp).unwrap_or_default())
+                                    }
                                 }
-                            });
-                            (200, serde_json::to_string(&resp).unwrap_or_default())
+                            } else {
+                                let resp = serde_json::json!({
+                                    "error": {"message": "No workers available", "type": "server_error"}
+                                });
+                                (503, serde_json::to_string(&resp).unwrap_or_default())
+                            }
                         }
                         Err(e) => {
                             error!("Failed to parse chat request: {}", e);

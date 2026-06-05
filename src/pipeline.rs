@@ -59,6 +59,8 @@ pub struct InferenceRequest {
     pub is_last: bool,
     pub max_new_tokens: usize,
     pub temperature: f32,
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +69,12 @@ pub struct InferenceResponse {
     pub token: Option<i64>,
     pub hidden_states: Option<Vec<f32>>,
     pub is_done: bool,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
