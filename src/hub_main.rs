@@ -97,13 +97,13 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start heartbeat cascade timer (every 30 seconds)
+    // Start heartbeat cascade timer (every 15 seconds)
     let hb_workers = workers.clone();
     let hb_state = state.clone();
     let hb_streams = worker_streams.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            tokio::time::sleep(Duration::from_secs(15)).await;
             if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams).await {
                 warn!("Heartbeat cascade failed: {}", e);
             }
