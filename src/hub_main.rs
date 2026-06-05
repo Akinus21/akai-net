@@ -172,8 +172,8 @@ async fn initiate_heartbeat_cascade(
         let streams_guard = streams.read().await;
         if let Some(writer) = streams_guard.get(&first.worker_id) {
             let msg = HubMessage::HeartbeatForward { pipeline: pipeline.clone() };
-            let data = serde_json::to_vec(&msg)?;
-            let mut writer = writer.lock().await;
+            let data = encode_msg(&msg)?;
+
             match writer.write_all(&data).await {
                 Ok(_) => info!("HeartbeatForward sent to {} via persistent connection", first.worker_id),
                 Err(e) => warn!("Failed to send HeartbeatForward to {}: {}", first.worker_id, e),
@@ -184,6 +184,12 @@ async fn initiate_heartbeat_cascade(
     }
 
     Ok(())
+}
+
+fn encode_msg(msg: &HubMessage) -> Result<Vec<u8>> {
+    let mut data = serde_json::to_vec(msg)?;
+    data.push(b'\n');
+    Ok(data)
 }
 
 async fn handle_worker_connection(
@@ -198,10 +204,11 @@ async fn handle_worker_connection(
     let mut reader = reader;
     let writer = Arc::new(Mutex::new(writer));
     let mut current_worker_id: Option<String> = None;
-    let mut buf = vec![0u8; 65536];
+    let mut read_buf = Vec::new();
     
     loop {
-        let n = reader.read(&mut buf).await?;
+        let mut tmp = [0u8; 65536];
+        let n = reader.read(&mut tmp).await?;
         if n == 0 {
             if let Some(ref id) = current_worker_id {
                 info!("Worker {} disconnected", id);
@@ -213,14 +220,24 @@ async fn handle_worker_connection(
             }
             break;
         }
+        read_buf.extend_from_slice(&tmp[..n]);
 
-        let message: HubMessage = match serde_json::from_slice(&buf[..n]) {
-            Ok(m) => m,
-            Err(e) => {
-                error!("Failed to parse worker message: {}", e);
+        // Process complete lines (newline-delimited JSON)
+        while let Some(pos) = read_buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = read_buf.drain(..=pos).collect();
+            let line = &line[..line.len() - 1]; // strip trailing \n
+
+            if line.is_empty() {
                 continue;
             }
-        };
+
+            let message: HubMessage = match serde_json::from_slice(line) {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("Failed to parse worker message: {} (line: {} bytes)", e, line.len());
+                    continue;
+                }
+            };
 
         match message {
             HubMessage::Register(info) => {
@@ -287,7 +304,7 @@ async fn handle_worker_connection(
                     pipeline: Some(pipeline.clone()),
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
-                let data = serde_json::to_vec(&msg)?;
+                let data = encode_msg(&msg)?;
                 {
                     let mut w = writer.lock().await;
                     w.write_all(&data).await?;
@@ -353,32 +370,10 @@ async fn handle_worker_connection(
                     pipeline,
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
-                let data = serde_json::to_vec(&msg)?;
+                let data = encode_msg(&msg)?;
                 {
                     let mut w = writer.lock().await;
                     w.write_all(&data).await?;
-                }
-            }
-            HubMessage::InferenceForward(fwd) => {
-                let to_worker = fwd.to_worker.clone();
-                let from_worker = fwd.from_worker.clone();
-                let data_len = fwd.data.len();
-                info!("Inference forward from {} to {} ({} bytes)", from_worker, to_worker, data_len);
-                let streams_guard = streams.read().await;
-                if let Some(target_writer) = streams_guard.get(&to_worker) {
-                    let msg = HubMessage::InferenceForward(fwd);
-                    match serde_json::to_vec(&msg) {
-                        Ok(data) => {
-                            let mut w = target_writer.lock().await;
-                            match w.write_all(&data).await {
-                                Ok(_) => info!("Forwarded inference data to {}", to_worker),
-                                Err(e) => warn!("Failed to forward to {}: {}", to_worker, e),
-                            }
-                        }
-                        Err(e) => warn!("Failed to serialize InferenceForward: {}", e),
-                    }
-                } else {
-                    warn!("Target worker {} not found for inference forward", to_worker);
                 }
             }
             HubMessage::HeartbeatResponse(_) => {
@@ -394,11 +389,35 @@ async fn handle_worker_connection(
                     warn!("No pending inference request for id={}", resp.id);
                 }
             }
+            HubMessage::InferenceForward(fwd) => {
+                let to_worker = fwd.to_worker.clone();
+                let from_worker = fwd.from_worker.clone();
+                let data_len = fwd.data.len();
+                info!("Inference forward from {} to {} ({} bytes)", from_worker, to_worker, data_len);
+                let streams_guard = streams.read().await;
+                if let Some(target_writer) = streams_guard.get(&to_worker) {
+                    let data = match encode_msg(&HubMessage::InferenceForward(fwd)) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            warn!("Failed to serialize InferenceForward: {}", e);
+                            continue;
+                        }
+                    };
+                    let mut w = target_writer.lock().await;
+                    match w.write_all(&data).await {
+                        Ok(_) => info!("Forwarded inference data to {}", to_worker),
+                        Err(e) => warn!("Failed to forward to {}: {}", to_worker, e),
+                    }
+                } else {
+                    warn!("Target worker {} not found for inference forward", to_worker);
+                }
+            }
             _ => {
                 warn!("Unexpected message type from worker");
             }
         }
-    }
+        } // end while let Some(pos)
+    } // end loop
     
     Ok(())
 }
