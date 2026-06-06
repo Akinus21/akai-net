@@ -296,7 +296,7 @@ async fn handle_worker_connection(
                     layer_offset,
                     num_layers,
                     reassign: false,
-                    model_name,
+                    model_name: model_name.clone(),
                     model_url,
                     pipeline: Some(pipeline.clone()),
                 };
@@ -359,6 +359,7 @@ async fn handle_worker_connection(
                     }
                 };
                 
+                let pipeline_count = pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0);
                 let response = HeartbeatResponse {
                     layer_offset: hb.layer_offset,
                     num_layers: hb.num_layers,
@@ -375,7 +376,7 @@ async fn handle_worker_connection(
                 }
                 if current_worker_id.as_deref() == Some(&hb.worker_id) {
                     info!("[-> {}] HeartbeatResponse: ack, pipeline={}",
-                        hb.worker_id, pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0));
+                        hb.worker_id, pipeline_count);
                 }
             }
             HubMessage::HeartbeatResponse(_) => {
