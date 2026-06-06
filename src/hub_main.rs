@@ -45,10 +45,17 @@ async fn main() -> Result<()> {
     let _ = hub_id;
     let tunnel_certs_dir = std::env::var("TUNNEL_CERTS_DIR").unwrap_or_else(|_| "/etc/akai-tunnel/certs".to_string());
     let duo_config = duo::load_duo_config();
+    let wg_easy_password = std::env::var("WG_EASY_PASSWORD").unwrap_or_default();
+    let wg_easy_host = std::env::var("WG_EASY_HOST").unwrap_or_else(|_| "wireguard:51821".to_string());
     if duo_config.is_some() {
         info!("Duo 2FA enabled (host: {})", duo_config.as_ref().unwrap().host);
     } else {
         info!("Duo 2FA not configured (set DUO_IKEY, DUO_SKEY, DUO_HOST)");
+    }
+    if !wg_easy_password.is_empty() {
+        info!("WireGuard VPN enrollment enabled (wg-easy at {})", wg_easy_host);
+    } else {
+        info!("WireGuard VPN enrollment not configured (set WG_EASY_PASSWORD)");
     }
 
     info!("Admin users: {}", admin_users.join(", "));
@@ -124,7 +131,7 @@ async fn main() -> Result<()> {
     let http_streams = worker_streams.clone();
     let http_pending = pending_inferences.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir).await
+        start_http_server(hub_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host).await
     });
 
     // Keep connection to queue alive
@@ -434,7 +441,7 @@ async fn handle_worker_connection(
     Ok(())
 }
 
-async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String) -> Result<()> {
+async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -614,6 +621,67 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                         }
                         Err(e) => {
                             error!("Failed to parse auth request: {}", e);
+                            (400, r#"{"error":"invalid request body"}"#.to_string())
+                        }
+                    }
+                } else if path.starts_with("POST /auth/vpn") {
+                    match serde_json::from_str::<serde_json::Value>(body) {
+                        Ok(json) => {
+                            let username = json["username"].as_str().unwrap_or("").to_string();
+                            let worker_name = json["worker_name"].as_str().unwrap_or("").to_string();
+                            info!("[auth] VPN enrollment: user={}, worker={}", username, worker_name);
+
+                            let authorized = admin_users.iter().any(|u| u == &username.to_lowercase());
+                            if !authorized {
+                                (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else {
+                                let duo_ok = if let Some(ref duo_cfg) = duo_config {
+                                    info!("[auth] VPN: sending Duo push to '{}'...", username);
+                                    match duo::auth_push(duo_cfg, &username).await {
+                                        Ok(result) if result.allowed => {
+                                            info!("[auth] VPN: Duo approved for '{}'", username);
+                                            true
+                                        }
+                                        Ok(result) => {
+                                            info!("[auth] VPN: Duo denied for '{}': {}", username, result.status);
+                                            false
+                                        }
+                                        Err(e) => {
+                                            error!("[auth] VPN: Duo API error: {}", e);
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    info!("[auth] VPN: No Duo, auto-approving '{}'", username);
+                                    true
+                                };
+
+                                if !duo_ok {
+                                    (403, serde_json::json!({"error": "Duo denied"}).to_string())
+                                } else if wg_easy_password.is_empty() {
+                                    (503, r#"{"error":"WireGuard VPN not configured on hub"}"#.to_string())
+                                } else {
+                                    match create_wireguard_client(&wg_easy_host, &wg_easy_password, &format!("akai-agent-{}", worker_name)).await {
+                                        Ok((client_id, config_text)) => {
+                                            info!("[auth] VPN: created WG client {} for '{}'", client_id, username);
+                                            let resp = serde_json::json!({
+                                                "status": "enrolled",
+                                                "client_id": client_id,
+                                                "wireguard_config": config_text,
+                                                "hub_vpn_addr": format!("10.8.0.1:{}", worker_port),
+                                            });
+                                            (200, serde_json::to_string(&resp).unwrap_or_default())
+                                        }
+                                        Err(e) => {
+                                            error!("[auth] VPN: failed to create WG client: {}", e);
+                                            (500, serde_json::json!({"error": format!("WG client creation failed: {}", e)}).to_string())
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to parse auth VPN request: {}", e);
                             (400, r#"{"error":"invalid request body"}"#.to_string())
                         }
                     }
@@ -831,8 +899,68 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                                                             "error": {"message": "Request timed out", "type": "server_error"}
                                                         });
                                                         (504, serde_json::to_string(&resp).unwrap_or_default())
-                                                    }
-                                                }
+    }
+}
+
+async fn create_wireguard_client(wg_easy_host: &str, wg_easy_password: &str, name: &str) -> Result<(String, String)> {
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", wg_easy_host);
+
+    let login_resp = client.post(format!("{}/api/session", base))
+        .json(&serde_json::json!({"password": wg_easy_password}))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+
+    if !login_resp.status().is_success() {
+        anyhow::bail!("wg-easy auth failed: {}", login_resp.status());
+    }
+
+    let cookies = login_resp.cookies().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
+
+    let create_resp = client.post(format!("{}/api/wireguard/client", base))
+        .header("cookie", &cookies)
+        .json(&serde_json::json!({"name": name}))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+
+    if !create_resp.status().is_success() {
+        anyhow::bail!("wg-easy create client failed: {}", create_resp.status());
+    }
+
+    let clients_resp = client.get(format!("{}/api/wireguard/client", base))
+        .header("cookie", &cookies)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+
+    if !clients_resp.status().is_success() {
+        anyhow::bail!("wg-easy list clients failed: {}", clients_resp.status());
+    }
+
+    let clients: serde_json::Value = clients_resp.json().await?;
+    let clients_arr = clients.as_array().ok_or_else(|| anyhow::anyhow!("invalid clients response"))?;
+
+    let found = clients_arr.iter().find(|c| c["name"].as_str() == Some(name))
+        .ok_or_else(|| anyhow::anyhow!("created client not found in list"))?;
+
+    let client_id = found["id"].as_str().ok_or_else(|| anyhow::anyhow!("missing client id"))?.to_string();
+
+    let config_resp = client.get(format!("{}/api/wireguard/client/{}/configuration", base, client_id))
+        .header("cookie", &cookies)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+
+    if !config_resp.status().is_success() {
+        anyhow::bail!("wg-easy get config failed: {}", config_resp.status());
+    }
+
+    let config_text = config_resp.text().await?;
+
+    Ok((client_id, config_text))
+}
                                             }
                                             Err(e) => {
                                                 error!("Failed to send inference request to worker: {}", e);
