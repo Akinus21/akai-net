@@ -374,8 +374,8 @@ async fn handle_worker_connection(
                     w.write_all(&data).await?;
                 }
                 if current_worker_id.as_deref() == Some(&hb.worker_id) {
-                    info!("[-> {}] HeartbeatResponse: ack with model={}, pipeline={}",
-                        hb.worker_id, hb.model_name, pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0));
+                    info!("[-> {}] HeartbeatResponse: ack, pipeline={}",
+                        hb.worker_id, pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0));
                 }
             }
             HubMessage::HeartbeatResponse(_) => {
