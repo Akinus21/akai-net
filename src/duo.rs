@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use base64::Engine;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -22,8 +21,8 @@ fn duo_sign(ikey: &str, skey: &str, date: &str, method: &str, host: &str, path: 
     let mut mac = HmacSha1::new_from_slice(skey.as_bytes()).expect("HMAC key");
     mac.update(canon.as_bytes());
     let sig = mac.finalize().into_bytes();
-    let b64 = base64::engine::general_purpose::STANDARD.encode(sig);
-    format!("Basic {}:{}", ikey, b64)
+    let hex_sig = sig.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("");
+    format!("Basic {}:{}", ikey, hex_sig)
 }
 
 pub async fn auth_push(config: &DuoConfig, username: &str) -> Result<DuoAuthResult> {
