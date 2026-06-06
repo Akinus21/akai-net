@@ -30,7 +30,7 @@ pub async fn auth_push(config: &DuoConfig, username: &str) -> Result<DuoAuthResu
     let date = Utc::now().format("%a, %d %b %Y %H:%M:%S %z").to_string();
     let method = "POST";
     let path = "/auth/v2/auth";
-    let params = format!("factor=push&username={}", urlencoding::encode(username));
+    let params = format!("factor=push&username={}", percent_encode(username));
     let auth_header = duo_sign(&config.ikey, &config.skey, &date, method, &config.host, path, &params);
 
     let url = format!("https://{}{}?{}", config.host, path, params);
@@ -72,4 +72,14 @@ pub fn load_duo_config() -> Option<DuoConfig> {
         return None;
     }
     Some(DuoConfig { ikey, skey, host })
+}
+
+fn percent_encode(s: &str) -> String {
+    s.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            c.to_string()
+        } else {
+            format!("%{:02X}", c as u8)
+        }
+    }).collect()
 }
