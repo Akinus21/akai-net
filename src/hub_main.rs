@@ -1,4 +1,5 @@
 mod pipeline;
+mod duo;
 
 use anyhow::Result;
 use pipeline::{HubMessage, WorkerInfo, ModelConfig, HeartbeatResponse, InferenceResponse, calculate_layer_assignment, build_pipeline_info};
@@ -41,7 +42,14 @@ async fn main() -> Result<()> {
     let admin_users = parse_admin_users();
     let queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
     let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
-    let _ = hub_id; // Suppress unused warning
+    let _ = hub_id;
+    let tunnel_certs_dir = std::env::var("TUNNEL_CERTS_DIR").unwrap_or_else(|_| "/etc/akai-tunnel/certs".to_string());
+    let duo_config = duo::load_duo_config();
+    if duo_config.is_some() {
+        info!("Duo 2FA enabled (host: {})", duo_config.as_ref().unwrap().host);
+    } else {
+        info!("Duo 2FA not configured (set DUO_IKEY, DUO_SKEY, DUO_HOST)");
+    }
 
     info!("Admin users: {}", admin_users.join(", "));
 
@@ -116,7 +124,7 @@ async fn main() -> Result<()> {
     let http_streams = worker_streams.clone();
     let http_pending = pending_inferences.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, http_workers, http_state, http_streams, http_pending, admin_users).await
+        start_http_server(hub_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir).await
     });
 
     // Keep connection to queue alive
@@ -426,7 +434,7 @@ async fn handle_worker_connection(
     Ok(())
 }
 
-async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>) -> Result<()> {
+async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -517,21 +525,41 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                             let username = json["username"].as_str().unwrap_or("").to_string();
                             let worker_name = json["worker_name"].as_str().unwrap_or("").to_string();
                             
-                            info!("Auth register: user={}, worker={}", username, worker_name);
+                            info!("[auth] Register: user={}, worker={}", username, worker_name);
                             
-                            // Check if username is authorized
                             let authorized = admin_users.iter().any(|u| u == &username.to_lowercase());
                             if !authorized {
-                                info!("Auth register rejected: user '{}' not authorized", username);
+                                info!("[auth] Register rejected: user '{}' not authorized", username);
                                 (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else if let Some(ref duo_cfg) = duo_config {
+                                info!("[auth] Sending Duo push to '{}'...", username);
+                                match duo::auth_push(duo_cfg, &username).await {
+                                    Ok(result) => {
+                                        if result.allowed {
+                                            info!("[auth] Duo approved for '{}' ({})", username, result.status);
+                                            let resp = serde_json::json!({
+                                                "status": "provisioned",
+                                                "username": username,
+                                                "worker_id": format!("{}:{}", username, worker_name),
+                                                "rpc_port": 50052
+                                            });
+                                            (200, serde_json::to_string(&resp).unwrap_or_default())
+                                        } else {
+                                            info!("[auth] Duo denied for '{}' ({})", username, result.status);
+                                            (403, serde_json::json!({"error": format!("Duo denied: {}", result.status)}).to_string())
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("[auth] Duo API error for '{}': {}", username, e);
+                                        (500, serde_json::json!({"error": format!("Duo error: {}", e)}).to_string())
+                                    }
+                                }
                             } else {
-                                // Auto-approve for now - TODO: integrate with Duo
-                                info!("Auth register approved for: {}", username);
+                                info!("[auth] No Duo configured, auto-approving '{}'", username);
                                 let resp = serde_json::json!({
                                     "status": "provisioned",
                                     "username": username,
                                     "worker_id": format!("{}:{}", username, worker_name),
-                                    "wg_ip": format!("10.8.0.{}", rand::random::<u8>() % 200 + 2),
                                     "rpc_port": 50052
                                 });
                                 (200, serde_json::to_string(&resp).unwrap_or_default())
@@ -546,17 +574,36 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                     match serde_json::from_str::<serde_json::Value>(body) {
                         Ok(json) => {
                             let username = json["username"].as_str().unwrap_or("").to_string();
-                            info!("Auth login attempt for: {}", username);
+                            info!("[auth] Login: user={}", username);
                             
-                            // Check if username is authorized
                             let authorized = admin_users.iter().any(|u| u == &username.to_lowercase());
                             if !authorized {
-                                info!("Auth rejected: user '{}' not in admin list", username);
+                                info!("[auth] Login rejected: user '{}' not in admin list", username);
                                 (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else if let Some(ref duo_cfg) = duo_config {
+                                info!("[auth] Sending Duo push to '{}'...", username);
+                                match duo::auth_push(duo_cfg, &username).await {
+                                    Ok(result) => {
+                                        if result.allowed {
+                                            info!("[auth] Duo approved for '{}'", username);
+                                            let resp = serde_json::json!({
+                                                "status": "approved",
+                                                "username": username,
+                                                "token": format!("token-{}", rand::random::<u64>())
+                                            });
+                                            (200, serde_json::to_string(&resp).unwrap_or_default())
+                                        } else {
+                                            info!("[auth] Duo denied for '{}': {}", username, result.status);
+                                            (403, serde_json::json!({"error": format!("Duo denied: {}", result.status)}).to_string())
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("[auth] Duo API error for '{}': {}", username, e);
+                                        (500, serde_json::json!({"error": format!("Duo error: {}", e)}).to_string())
+                                    }
+                                }
                             } else {
-                                // For now, auto-approve if user is authorized
-                                // TODO: Integrate with Duo for real 2FA
-                                info!("Auth approved for: {}", username);
+                                info!("[auth] No Duo configured, auto-approving '{}'", username);
                                 let resp = serde_json::json!({
                                     "status": "approved",
                                     "username": username,
@@ -579,8 +626,39 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                                 .to_lowercase();
                             let authorized = admin_users.iter().any(|u| u == &username);
                             if !authorized {
-                                info!("Model change rejected: user '{}' not authorized", username);
+                                info!("[admin] Model change rejected: user '{}' not authorized", username);
                                 (403, r#"{"error":"user not authorized"}"#.to_string())
+                            } else if let Some(ref duo_cfg) = duo_config {
+                                info!("[admin] Model change: sending Duo push to '{}'...", username);
+                                match duo::auth_push(duo_cfg, &username).await {
+                                    Ok(result) if result.allowed => {
+                                        let name = json["name"].as_str().unwrap_or("unknown").to_string();
+                                        let layers = json["layers"].as_u64().unwrap_or(32) as usize;
+                                        let url = json["url"].as_str().unwrap_or("").to_string();
+
+                                        let mut state_guard = state.lock().await;
+                                        state_guard.model.name = name;
+                                        state_guard.model.num_layers = layers;
+                                        state_guard.model_url = url;
+
+                                        info!("[admin] Model updated by {} (Duo approved): {} ({} layers)", username, state_guard.model.name, layers);
+
+                                        let resp = serde_json::json!({
+                                            "status": "ok",
+                                            "model": state_guard.model.name,
+                                            "layers": layers,
+                                        });
+                                        (200, serde_json::to_string(&resp).unwrap_or_default())
+                                    }
+                                    Ok(result) => {
+                                        info!("[admin] Duo denied model change for '{}': {}", username, result.status);
+                                        (403, serde_json::json!({"error": format!("Duo denied: {}", result.status)}).to_string())
+                                    }
+                                    Err(e) => {
+                                        error!("[admin] Duo API error for '{}': {}", username, e);
+                                        (500, serde_json::json!({"error": format!("Duo error: {}", e)}).to_string())
+                                    }
+                                }
                             } else {
                                 let name = json["name"].as_str().unwrap_or("unknown").to_string();
                                 let layers = json["layers"].as_u64().unwrap_or(32) as usize;
@@ -591,7 +669,7 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                                 state_guard.model.num_layers = layers;
                                 state_guard.model_url = url;
 
-                                info!("Model updated by {}: {} ({} layers)", username, state_guard.model.name, layers);
+                                info!("[admin] Model updated by {}: {} ({} layers)", username, state_guard.model.name, layers);
 
                                 let resp = serde_json::json!({
                                     "status": "ok",
@@ -605,6 +683,22 @@ async fn start_http_server(port: u16, workers: WorkerMap, state: HubStateRef, st
                             error!("Failed to parse admin request: {}", e);
                             (400, r#"{"error":"invalid request body"}"#.to_string())
                         }
+                    }
+                } else if path.starts_with("GET /tunnel/certs") {
+                    let ca = std::fs::read(format!("{}/ca.crt", tunnel_certs_dir)).unwrap_or_default();
+                    let worker_cert = std::fs::read(format!("{}/worker.crt", tunnel_certs_dir)).unwrap_or_default();
+                    let worker_key = std::fs::read(format!("{}/worker.key", tunnel_certs_dir)).unwrap_or_default();
+                    if ca.is_empty() {
+                        (500, r#"{"error":"tunnel certs not available"}"#.to_string())
+                    } else {
+                        let resp = serde_json::json!({
+                            "ca_cert": String::from_utf8_lossy(&ca).to_string(),
+                            "worker_cert": String::from_utf8_lossy(&worker_cert).to_string(),
+                            "worker_key": String::from_utf8_lossy(&worker_key).to_string(),
+                            "tunnel_host": "tunnel.akinus21.com",
+                            "tunnel_port": 443,
+                        });
+                        (200, serde_json::to_string(&resp).unwrap_or_default())
                     }
                 } else if path.starts_with("GET /pipeline/status") {
                     // Return current pipeline registry for monitoring
