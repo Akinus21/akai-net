@@ -899,9 +899,9 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                                                             "error": {"message": "Request timed out", "type": "server_error"}
                                                         });
                                                         (504, serde_json::to_string(&resp).unwrap_or_default())
-    }
-}
-
+                                                    }
+                                                }
+                                            }
                                             Err(e) => {
                                                 error!("Failed to send inference request to worker: {}", e);
                                                 pending.lock().await.remove(&request_id);
