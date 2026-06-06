@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use base64::Engine;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -21,8 +22,9 @@ fn duo_sign(ikey: &str, skey: &str, date: &str, method: &str, host: &str, path: 
     let mut mac = HmacSha1::new_from_slice(skey.as_bytes()).expect("HMAC key");
     mac.update(canon.as_bytes());
     let sig = mac.finalize().into_bytes();
-    let hex_sig = sig.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("");
-    format!("Basic {}:{}", ikey, hex_sig)
+    let hex_sig: String = sig.iter().map(|b| format!("{:02x}", b)).collect();
+    let auth = format!("{}:{}", ikey, hex_sig);
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(auth))
 }
 
 pub async fn auth_push(config: &DuoConfig, username: &str) -> Result<DuoAuthResult> {
@@ -30,14 +32,16 @@ pub async fn auth_push(config: &DuoConfig, username: &str) -> Result<DuoAuthResu
     let method = "POST";
     let path = "/auth/v2/auth";
     let params = format!("factor=push&username={}", percent_encode(username));
-    let auth_header = duo_sign(&config.ikey, &config.skey, &date, method, &config.host, path, &params);
+    let auth_header = duo_sign(&config.ikey, &config.skey, &date, method, &config.host.to_lowercase(), path, &params);
 
-    let url = format!("https://{}{}?{}", config.host, path, params);
+    let url = format!("https://{}{}", config.host, path);
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
         .header("Date", &date)
         .header("Authorization", auth_header)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(params.clone())
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
