@@ -38,6 +38,9 @@ fn parse_admin_users() -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        error!("PANIC: {}", info);
+    }));
     tracing_subscriber::fmt()
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .init();
@@ -143,8 +146,9 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(15)).await;
-            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams, &hb_vpn_addr, &hb_missed, &hb_responded, &hb_wg_password, &hb_wg_host).await {
-                warn!("Heartbeat cascade failed: {}", e);
+            match initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams, &hb_vpn_addr, &hb_missed, &hb_responded, &hb_wg_password, &hb_wg_host).await {
+                Ok(()) => {},
+                Err(e) => error!("Heartbeat cascade error: {}", e),
             }
         }
     });
@@ -184,6 +188,7 @@ async fn initiate_heartbeat_cascade(
     wg_host: &str,
 ) -> Result<()> {
     // Check which workers responded in the previous cascade, increment missed counters
+    info!("Cascade: checking previous responses");
     let mut to_deregister: Vec<String> = Vec::new();
     {
         let responded = cascade_responded.lock().await;
@@ -259,6 +264,7 @@ async fn initiate_heartbeat_cascade(
     }
 
     let pipeline = {
+        info!("Cascade: building pipeline info");
         let workers_guard = workers.read().await;
         let state_guard = state.lock().await;
         let worker_list: Vec<_> = workers_guard.values().cloned().collect();
@@ -313,6 +319,7 @@ async fn initiate_heartbeat_cascade(
         }
     }
 
+    info!("Cascade: cycle complete");
     Ok(())
 }
 
