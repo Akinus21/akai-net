@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     let worker_port: u16 = std::env::var("WORKER_PORT").unwrap_or_else(|_| "50051".to_string()).parse().unwrap_or(50051);
     let hub_vpn_addr = std::env::var("HUB_VPN_ADDR").unwrap_or_else(|_| format!("10.8.0.1:{}", hub_port));
     let admin_users = parse_admin_users();
-    let queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
+    let _queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
     let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
     let _ = hub_id;
     let tunnel_certs_dir = std::env::var("TUNNEL_CERTS_DIR").unwrap_or_else(|_| "/etc/akai-tunnel/certs".to_string());
@@ -89,6 +89,9 @@ async fn main() -> Result<()> {
     let worker_streams_clone = worker_streams.clone();
     let worker_state = state.clone();
     let worker_pending = pending_inferences.clone();
+    let hb_vpn_addr = hub_vpn_addr.clone();
+    let http_vpn_addr = hub_vpn_addr.clone();
+    let wp_vpn_addr = hub_vpn_addr;
     tokio::spawn(async move {
         let listener = match TcpListener::bind(format!("0.0.0.0:{}", worker_port)).await {
             Ok(l) => l,
@@ -106,9 +109,9 @@ async fn main() -> Result<()> {
                     let streams = worker_streams_clone.clone();
                     let state = worker_state.clone();
                     let pending = worker_pending.clone();
-                    let hub_vpn_addr_clone = hub_vpn_addr.clone();
+                    let wp_vpn_addr = wp_vpn_addr.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, hub_vpn_addr_clone).await {
+                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, wp_vpn_addr).await {
                             error!("Worker connection error: {}", e);
                         }
                     });
@@ -122,7 +125,6 @@ async fn main() -> Result<()> {
     let hb_workers = workers.clone();
     let hb_state = state.clone();
     let hb_streams = worker_streams.clone();
-    let hb_vpn_addr = hub_vpn_addr.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -138,7 +140,7 @@ async fn main() -> Result<()> {
     let http_streams = worker_streams.clone();
     let http_pending = pending_inferences.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, worker_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host, hub_vpn_addr.clone()).await
+        start_http_server(hub_port, worker_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host, http_vpn_addr).await
     });
 
     // Keep connection to queue alive
@@ -316,7 +318,7 @@ async fn handle_worker_connection(
                 }
 
                 // Build pipeline info to send (use proxy URL for model downloads)
-                let (model_name, model_url_raw, num_layers_total) = {
+                let (model_name, _model_url_raw, num_layers_total) = {
                     let state_guard = state.lock().await;
                     (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
                 };
@@ -689,7 +691,7 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                                                 "status": "enrolled",
                                                 "client_id": client_id,
                                                 "wireguard_config": config_text,
-                                                "hub_vpn_addr": format!("10.8.0.1:{}", worker_port),
+                                                "hub_vpn_addr": hub_vpn_addr,
                                             });
                                             (200, serde_json::to_string(&resp).unwrap_or_default())
                                         }
