@@ -75,9 +75,15 @@ jobs:
           TAG="${{ steps.tag.outputs.new_tag }}"
           git tag -a "$TAG" -m "Release $TAG" -f
           git push origin "$TAG" -f
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "Docker image: \`ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}\`"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "${{ github.repository }}" \
+              --title "$TAG" \
+              --notes "Docker image: \`ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}\`"
+          else
+            gh release create "$TAG" --repo "${{ github.repository }}" \
+              --title "$TAG" \
+              --notes "Docker image: \`ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}\`"
+          fi
 
       - name: Notify webhook — success
         if: >
