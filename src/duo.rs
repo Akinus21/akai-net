@@ -32,7 +32,7 @@ pub async fn auth_push(config: &DuoConfig, username: &str) -> Result<DuoAuthResu
     let method = "POST";
     let path = "/auth/v2/auth";
     let encoded_user = percent_encode(username);
-    let params = format!("factor=push&username={}", encoded_user);
+    let params = format!("device=auto&factor=push&username={}", encoded_user);
     let auth_header = duo_sign(&config.ikey, &config.skey, &date, method, &config.host.to_lowercase(), path, &params);
 
     let url = format!("https://{}{}", config.host, path);
@@ -41,7 +41,7 @@ pub async fn auth_push(config: &DuoConfig, username: &str) -> Result<DuoAuthResu
         .post(&url)
         .header("Date", &date)
         .header("Authorization", auth_header)
-        .form(&[("factor", "push"), ("username", username)])
+        .form(&[("factor", "push"), ("device", "auto"), ("username", username)])
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
