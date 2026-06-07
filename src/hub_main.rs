@@ -22,6 +22,10 @@ struct HubState {
 
 type HubStateRef = Arc<Mutex<HubState>>;
 
+fn model_proxy_url(hub_vpn_addr: &str) -> String {
+    format!("http://{}/model/download", hub_vpn_addr)
+}
+
 fn parse_admin_users() -> Vec<String> {
     std::env::var("ADMIN_USERS")
         .unwrap_or_else(|_| "akinus".to_string())
@@ -39,6 +43,7 @@ async fn main() -> Result<()> {
 
     let hub_port: u16 = std::env::var("HUB_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080);
     let worker_port: u16 = std::env::var("WORKER_PORT").unwrap_or_else(|_| "50051".to_string()).parse().unwrap_or(50051);
+    let hub_vpn_addr = std::env::var("HUB_VPN_ADDR").unwrap_or_else(|_| format!("10.8.0.1:{}", hub_port));
     let admin_users = parse_admin_users();
     let queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
     let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
@@ -101,8 +106,9 @@ async fn main() -> Result<()> {
                     let streams = worker_streams_clone.clone();
                     let state = worker_state.clone();
                     let pending = worker_pending.clone();
+                    let hub_vpn_addr_clone = hub_vpn_addr.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending).await {
+                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, hub_vpn_addr_clone).await {
                             error!("Worker connection error: {}", e);
                         }
                     });
@@ -112,14 +118,15 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start heartbeat cascade timer (every 15 seconds)
+    // Start heartbeat cascade timer (every 60 seconds)
     let hb_workers = workers.clone();
     let hb_state = state.clone();
     let hb_streams = worker_streams.clone();
+    let hb_vpn_addr = hub_vpn_addr.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(15)).await;
-            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams).await {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams, &hb_vpn_addr).await {
                 warn!("Heartbeat cascade failed: {}", e);
             }
         }
@@ -131,7 +138,7 @@ async fn main() -> Result<()> {
     let http_streams = worker_streams.clone();
     let http_pending = pending_inferences.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, worker_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host).await
+        start_http_server(hub_port, worker_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host, hub_vpn_addr.clone()).await
     });
 
     // Keep connection to queue alive
@@ -153,6 +160,7 @@ async fn initiate_heartbeat_cascade(
     workers: &WorkerMap,
     state: &HubStateRef,
     streams: &WorkerStreams,
+    hub_vpn_addr: &str,
 ) -> Result<()> {
     let pipeline = {
         let workers_guard = workers.read().await;
@@ -170,15 +178,17 @@ async fn initiate_heartbeat_cascade(
             return Ok(());
         }
         
-        let pipeline = build_pipeline_info(
+        let proxy_url = model_proxy_url(hub_vpn_addr);
+        let mut pipeline = build_pipeline_info(
             &worker_list,
             &state_guard.model.name,
-            &state_guard.model_url,
+            &proxy_url,
             state_guard.model.num_layers,
         );
         info!("Cascade: {} workers, {} streams, first={}", 
               worker_list.len(), stream_count,
               pipeline.workers.first().map(|w| w.worker_id.as_str()).unwrap_or("none"));
+        pipeline.model_url = proxy_url;
         pipeline
     };
 
@@ -223,6 +233,7 @@ async fn handle_worker_connection(
     streams: WorkerStreams,
     state: HubStateRef,
     pending: PendingInferences,
+    hub_vpn_addr: String,
 ) -> Result<()> {
     let (reader, writer) = stream.into_split();
     let mut reader = reader;
@@ -304,14 +315,15 @@ async fn handle_worker_connection(
                     }
                 }
 
-                // Build pipeline info to send
-                let (model_name, model_url, num_layers_total) = {
+                // Build pipeline info to send (use proxy URL for model downloads)
+                let (model_name, model_url_raw, num_layers_total) = {
                     let state_guard = state.lock().await;
                     (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
                 };
+                let proxy_url = model_proxy_url(&hub_vpn_addr);
                 let workers_guard = workers.read().await;
                 let worker_list: Vec<_> = workers_guard.values().cloned().collect();
-                let pipeline = build_pipeline_info(&worker_list, &model_name, &model_url, num_layers_total);
+                let pipeline = build_pipeline_info(&worker_list, &model_name, &proxy_url, num_layers_total);
 
                 // Send heartbeat response with assignment + pipeline via persistent connection
                 let response = HeartbeatResponse {
@@ -319,7 +331,7 @@ async fn handle_worker_connection(
                     num_layers,
                     reassign: false,
                     model_name: model_name.clone(),
-                    model_url,
+                    model_url: proxy_url,
                     pipeline: Some(pipeline.clone()),
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
@@ -372,22 +384,24 @@ async fn handle_worker_connection(
                     if worker_list.is_empty() {
                         None
                     } else {
+                        let proxy_url = model_proxy_url(&hub_vpn_addr);
                         Some(build_pipeline_info(
                             &worker_list,
                             &state_guard.model.name,
-                            &state_guard.model_url,
+                            &proxy_url,
                             state_guard.model.num_layers,
                         ))
                     }
                 };
                 
                 let pipeline_count = pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0);
+                let proxy_url = model_proxy_url(&hub_vpn_addr);
                 let response = HeartbeatResponse {
                     layer_offset: hb.layer_offset,
                     num_layers: hb.num_layers,
                     reassign: false,
                     model_name: state.lock().await.model.name.clone(),
-                    model_url: state.lock().await.model_url.clone(),
+                    model_url: proxy_url,
                     pipeline,
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
@@ -448,7 +462,7 @@ async fn handle_worker_connection(
     Ok(())
 }
 
-async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String) -> Result<()> {
+async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String, hub_vpn_addr: String) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -786,6 +800,50 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                         state_guard.model.num_layers,
                     );
                     (200, serde_json::to_string(&pipeline).unwrap_or_default())
+                } else if path.starts_with("GET /model/download") {
+                    let state_guard = state.lock().await;
+                    let model_url = state_guard.model_url.clone();
+                    drop(state_guard);
+                    
+                    if model_url.is_empty() {
+                        (404, r#"{"error":"no model configured"}"#.to_string())
+                    } else {
+                        let client = reqwest::Client::new();
+                        match client.get(&model_url)
+                            .timeout(Duration::from_secs(600))
+                            .send().await
+                        {
+                            Ok(resp) => {
+                                if resp.status().is_success() {
+                                    let total = resp.content_length().unwrap_or(0);
+                                    info!("[model-proxy] Downloading {} ({:.1} MB)...", model_url, total as f64 / 1_048_576.0);
+                                    match resp.bytes().await {
+                                        Ok(bytes) => {
+                                            info!("[model-proxy] Downloaded {} bytes, proxying to worker", bytes.len());
+                                            let header = format!(
+                                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+                                                bytes.len()
+                                            );
+                                            let _ = stream.write_all(header.as_bytes()).await;
+                                            let _ = stream.write_all(&bytes).await;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            error!("[model-proxy] Failed to read model body: {}", e);
+                                            (502, serde_json::json!({"error": format!("model download failed: {}", e)}).to_string())
+                                        }
+                                    }
+                                } else {
+                                    error!("[model-proxy] Upstream returned status {}", resp.status());
+                                    (502, serde_json::json!({"error": format!("upstream status: {}", resp.status())}).to_string())
+                                }
+                            }
+                            Err(e) => {
+                                error!("[model-proxy] Failed to fetch model: {}", e);
+                                (502, serde_json::json!({"error": format!("model fetch failed: {}", e)}).to_string())
+                            }
+                        }
+                    }
                 } else if path.starts_with("POST /v1/chat/completions") {
                     match serde_json::from_str::<serde_json::Value>(body) {
                         Ok(json) => {
