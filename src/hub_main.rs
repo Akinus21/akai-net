@@ -19,12 +19,20 @@ type MissedHeartbeats = Arc<Mutex<HashMap<String, u32>>>;
 struct HubState {
     model: ModelConfig,
     model_url: String,
+    model_hash: String,
 }
 
 type HubStateRef = Arc<Mutex<HubState>>;
 
 fn model_proxy_url(hub_vpn_addr: &str) -> String {
     format!("http://{}/model/download", hub_vpn_addr)
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
 }
 
 fn parse_admin_users() -> Vec<String> {
@@ -79,6 +87,7 @@ async fn main() -> Result<()> {
             vocab_size: 32000,
         },
         model_url: std::env::var("MODEL_URL").unwrap_or_else(|_| "".to_string()),
+        model_hash: String::new(),
     }));
 
     info!("Akai-Net Hub starting...");
@@ -443,6 +452,7 @@ async fn handle_worker_connection(
                     reassign: false,
                     model_name: model_name.clone(),
                     model_url: proxy_url,
+                    model_hash: state.lock().await.model_hash.clone(),
                     pipeline: Some(pipeline.clone()),
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
@@ -526,6 +536,7 @@ async fn handle_worker_connection(
                     reassign: false,
                     model_name: state.lock().await.model.name.clone(),
                     model_url: proxy_url,
+                    model_hash: state.lock().await.model_hash.clone(),
                     pipeline,
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
@@ -963,10 +974,15 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                                     info!("[model-proxy] Downloading {} ({:.1} MB)...", model_url, total as f64 / 1_048_576.0);
                                     match resp.bytes().await {
                                         Ok(bytes) => {
-                                            info!("[model-proxy] Downloaded {} bytes, proxying to worker", bytes.len());
+                                            let hash = sha256_hex(&bytes);
+                                            {
+                                                let mut state_guard = state.lock().await;
+                                                state_guard.model_hash = hash.clone();
+                                            }
+                                            info!("[model-proxy] Downloaded {} bytes, hash={}, proxying to worker", bytes.len(), &hash[..12]);
                                             let header = format!(
-                                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-                                                bytes.len()
+                                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nX-Model-Hash: {}\r\n\r\n",
+                                                bytes.len(), hash
                                             );
                                             let _ = stream.write_all(header.as_bytes()).await;
                                             let _ = stream.write_all(&bytes).await;

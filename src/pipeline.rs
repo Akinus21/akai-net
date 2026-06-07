@@ -142,6 +142,8 @@ pub struct HeartbeatResponse {
     pub reassign: bool,
     pub model_name: String,
     pub model_url: String,
+    #[serde(default)]
+    pub model_hash: String,
     pub pipeline: Option<PipelineInfo>,
 }
 
