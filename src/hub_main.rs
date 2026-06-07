@@ -263,7 +263,7 @@ async fn initiate_heartbeat_cascade(
                 let count = missed_guard.entry(worker_id.clone()).or_insert(0);
                 *count += 1;
                 warn!("[cascade] {} missed heartbeat ({} consecutive)", worker_id, *count);
-                if *count >= 2 {
+                if *count >= 4 {
                     to_deregister.push(worker_id.clone());
                 }
             }
@@ -273,7 +273,7 @@ async fn initiate_heartbeat_cascade(
     // Deregister workers with 2+ consecutive misses
     if !to_deregister.is_empty() {
         for worker_id in &to_deregister {
-            warn!("[deregister] Removing worker {} after 2 consecutive missed heartbeats", worker_id);
+            warn!("[deregister] Removing worker {} after 4 consecutive missed heartbeats", worker_id);
 
             // Remove from workers and streams
             let removed_worker = {
