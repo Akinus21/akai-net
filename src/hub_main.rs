@@ -187,13 +187,20 @@ async fn initiate_heartbeat_cascade(
         let streams_guard = streams.read().await;
         if let Some(writer) = streams_guard.get(&first.worker_id) {
             let msg = HubMessage::HeartbeatForward { pipeline: pipeline.clone() };
-            let data = encode_msg(&msg)?;
+            let data = match encode_msg(&msg) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("[-> {}] HeartbeatForward encode failed: {}", first.worker_id, e);
+                    return Ok(());
+                }
+            };
 
             let mut w = writer.lock().await;
-            match w.write_all(&data).await {
-                Ok(_) => info!("[-> {}] HeartbeatForward: pipeline_id={}, {} workers, model={}", 
+            match tokio::time::timeout(Duration::from_secs(5), w.write_all(&data)).await {
+                Ok(Ok(_)) => info!("[-> {}] HeartbeatForward: pipeline_id={}, {} workers, model={}", 
                     first.worker_id, pipeline.pipeline_id, pipeline.workers.len(), pipeline.model_name),
-                Err(e) => warn!("[-> {}] HeartbeatForward FAILED: {}", first.worker_id, e),
+                Ok(Err(e)) => warn!("[-> {}] HeartbeatForward FAILED: {}", first.worker_id, e),
+                Err(_) => warn!("[-> {}] HeartbeatForward timed out (worker may be dead)", first.worker_id),
             }
         } else {
             warn!("No persistent stream for first worker {}", first.worker_id);
