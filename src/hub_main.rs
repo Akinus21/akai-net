@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
     let hub_port: u16 = std::env::var("HUB_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080);
     let worker_port: u16 = std::env::var("WORKER_PORT").unwrap_or_else(|_| "50051".to_string()).parse().unwrap_or(50051);
     let hub_vpn_addr = std::env::var("HUB_VPN_ADDR").unwrap_or_else(|_| format!("10.8.0.1:{}", worker_port));
+    let hub_http_vpn_addr = std::env::var("HUB_HTTP_VPN_ADDR").unwrap_or_else(|_| format!("10.8.0.1:{}", hub_port));
     let admin_users = parse_admin_users();
     let _queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
     let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
@@ -89,9 +90,11 @@ async fn main() -> Result<()> {
     let worker_streams_clone = worker_streams.clone();
     let worker_state = state.clone();
     let worker_pending = pending_inferences.clone();
-    let hb_vpn_addr = hub_vpn_addr.clone();
-    let http_vpn_addr = hub_vpn_addr.clone();
+    let hb_vpn_addr = hub_http_vpn_addr.clone();
+    let http_worker_vpn_addr = hub_vpn_addr.clone();
+    let http_http_vpn_addr = hub_http_vpn_addr.clone();
     let wp_vpn_addr = hub_vpn_addr;
+    let wp_http_vpn_addr = hub_http_vpn_addr;
     tokio::spawn(async move {
         let listener = match TcpListener::bind(format!("0.0.0.0:{}", worker_port)).await {
             Ok(l) => l,
@@ -110,8 +113,9 @@ async fn main() -> Result<()> {
                     let state = worker_state.clone();
                     let pending = worker_pending.clone();
                     let wp_vpn_addr = wp_vpn_addr.clone();
+                    let wp_http_vpn_addr = wp_http_vpn_addr.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, wp_vpn_addr).await {
+                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, wp_vpn_addr, wp_http_vpn_addr).await {
                             error!("Worker connection error: {}", e);
                         }
                     });
@@ -140,7 +144,7 @@ async fn main() -> Result<()> {
     let http_streams = worker_streams.clone();
     let http_pending = pending_inferences.clone();
     tokio::spawn(async move {
-        start_http_server(hub_port, worker_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host, http_vpn_addr).await
+        start_http_server(hub_port, worker_port, http_workers, http_state, http_streams, http_pending, admin_users, duo_config, tunnel_certs_dir, wg_easy_password, wg_easy_host, http_worker_vpn_addr, http_http_vpn_addr).await
     });
 
     // Keep connection to queue alive
@@ -162,7 +166,7 @@ async fn initiate_heartbeat_cascade(
     workers: &WorkerMap,
     state: &HubStateRef,
     streams: &WorkerStreams,
-    hub_vpn_addr: &str,
+    hub_http_vpn_addr: &str,
 ) -> Result<()> {
     let pipeline = {
         let workers_guard = workers.read().await;
@@ -180,7 +184,7 @@ async fn initiate_heartbeat_cascade(
             return Ok(());
         }
         
-        let proxy_url = model_proxy_url(hub_vpn_addr);
+        let proxy_url = model_proxy_url(hub_http_vpn_addr);
         let mut pipeline = build_pipeline_info(
             &worker_list,
             &state_guard.model.name,
@@ -236,6 +240,7 @@ async fn handle_worker_connection(
     state: HubStateRef,
     pending: PendingInferences,
     hub_vpn_addr: String,
+    hub_http_vpn_addr: String,
 ) -> Result<()> {
     let (reader, writer) = stream.into_split();
     let mut reader = reader;
@@ -322,7 +327,7 @@ async fn handle_worker_connection(
                     let state_guard = state.lock().await;
                     (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
                 };
-                let proxy_url = model_proxy_url(&hub_vpn_addr);
+                let proxy_url = model_proxy_url(&hub_http_vpn_addr);
                 let workers_guard = workers.read().await;
                 let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                 let pipeline = build_pipeline_info(&worker_list, &model_name, &proxy_url, num_layers_total);
@@ -386,7 +391,7 @@ async fn handle_worker_connection(
                     if worker_list.is_empty() {
                         None
                     } else {
-                        let proxy_url = model_proxy_url(&hub_vpn_addr);
+                        let proxy_url = model_proxy_url(&hub_http_vpn_addr);
                         Some(build_pipeline_info(
                             &worker_list,
                             &state_guard.model.name,
@@ -397,7 +402,7 @@ async fn handle_worker_connection(
                 };
                 
                 let pipeline_count = pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0);
-                let proxy_url = model_proxy_url(&hub_vpn_addr);
+                let proxy_url = model_proxy_url(&hub_http_vpn_addr);
                 let response = HeartbeatResponse {
                     layer_offset: hb.layer_offset,
                     num_layers: hb.num_layers,
@@ -464,7 +469,7 @@ async fn handle_worker_connection(
     Ok(())
 }
 
-async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String, hub_vpn_addr: String) -> Result<()> {
+async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String, hub_worker_vpn_addr: String, hub_http_vpn_addr: String) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -711,7 +716,7 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                                                 "status": "enrolled",
                                                 "client_id": client_id,
                                                 "wireguard_config": config_text,
-                                                "hub_vpn_addr": hub_vpn_addr,
+                                                "hub_vpn_addr": hub_worker_vpn_addr,
                                             });
                                             (200, serde_json::to_string(&resp).unwrap_or_default())
                                         }

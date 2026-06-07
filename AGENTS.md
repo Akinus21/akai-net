@@ -66,6 +66,8 @@ Layer assignment is calculated by hub based on worker capabilities:
 | `HIDDEN_SIZE` | `4096` | Hidden state dimension |
 | `HUB_PORT` | `8080` | HTTP API port |
 | `WORKER_PORT` | `50051` | Worker protocol port |
+| `HUB_VPN_ADDR` | `10.8.0.1:50051` | Worker protocol VPN address (for agents to connect) |
+| `HUB_HTTP_VPN_ADDR` | `10.8.0.1:8080` | HTTP API VPN address (for model proxy downloads) |
 | `ADMIN_KEY` | (none) | Bearer token for admin API |
 | `ADMIN_USERS` | `akinus` | Comma-separated list of authorized usernames |
 
