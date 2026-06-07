@@ -473,13 +473,33 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
     loop {
         match listener.accept().await {
             Ok((mut stream, _)) => {
-                let mut buf = [0u8; 16384];
-                let n = match stream.read(&mut buf).await {
-                    Ok(n) => n,
-                    Err(_) => continue,
-                };
+                let mut buf = vec![0u8; 65536];
+                let mut total = 0;
+                loop {
+                    let n = match stream.read(&mut buf[total..]).await {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    total += n;
 
-                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let request_so_far = String::from_utf8_lossy(&buf[..total]);
+                    let headers_end = request_so_far.find("\r\n\r\n");
+                    if let Some(hdr_end) = headers_end {
+                        let header_section = &request_so_far[..hdr_end];
+                        let content_length = header_section.lines()
+                            .find(|l| l.to_lowercase().starts_with("content-length:"))
+                            .and_then(|l| l.trim_start_matches("Content-Length:").trim_start_matches("content-length:").trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let body_received = total - (hdr_end + 4);
+                        if body_received >= content_length {
+                            break;
+                        }
+                    }
+                    if total >= buf.len() - 1 { break; }
+                }
+
+                let request = String::from_utf8_lossy(&buf[..total]).to_string();
                 let lines: Vec<&str> = request.lines().collect();
                 let path = lines.first().unwrap_or(&"");
 
