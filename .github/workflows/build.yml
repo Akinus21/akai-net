@@ -85,6 +85,19 @@ jobs:
               --notes "Docker image: \`ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}\`"
           fi
 
+      - name: Collect build logs on failure
+        if: failure()
+        run: |
+          {
+            echo "=== ENV ==="
+            echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo ""
+            echo "=== Docker build ==="
+            echo "Docker build failed. No detailed logs available."
+          } > /tmp/build-errors.txt
+          cat /tmp/build-errors.txt
+
       - name: Notify webhook — success
         if: >
           success() &&
@@ -107,26 +120,12 @@ jobs:
             --arg image  "$IMAGE" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,tag:$tag,image:$image}')" > /tmp/webhook-payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --max-time 15 --retry 3 \
+          curl -fsSL -X POST \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: build_success" \
             -H "X-Hub-Signature-256: $SIG" \
             --data-binary @/tmp/webhook-payload.json \
-            "https://webhook.akinus21.com/webhook/akai-net-build" || true
-          echo "Webhook notification completed"
-
-      - name: Collect build logs on failure
-        if: failure()
-        run: |
-          LOGS="Docker build failed. No detailed logs available."
-          if [ -n "${{ steps.build.outputs.imageid }}" ]; then
-            LOGS="Docker build failed. Image ID: ${{ steps.build.outputs.imageid }}"
-          fi
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          echo "BUILD_LOGS<<EOFMARKER" >> $GITHUB_ENV
-          echo "$LOGS" >> $GITHUB_ENV
-          echo "EOFMARKER" >> $GITHUB_ENV
-          echo "RUN_URL=$RUN_URL" >> $GITHUB_ENV
+            "https://webhook.akinus21.com/webhook/akai-net-build"
 
       - name: Notify webhook — failure
         if: failure()
@@ -134,13 +133,9 @@ jobs:
           WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
         run: |
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          SECRET_KEY="${WEBHOOK_HMAC_SECRET:-fallback_unsigned_key}"
           ERROR_TEXT="Docker build failed. See $RUN_URL"
-          if [ -n "${{ secrets.GH_TOKEN }}" ]; then
-            LOGS=$(gh run view ${{ github.run_id }} --repo "${{ github.repository }}" --log 2>/dev/null | tail -200 || echo "")
-            if [ -n "$LOGS" ]; then
-              ERROR_TEXT="$LOGS"
-            fi
+          if [ -f /tmp/build-errors.txt ]; then
+            ERROR_TEXT=$(head -80 /tmp/build-errors.txt)
           fi
           printf '%s' "$(printf '%s' "$ERROR_TEXT" | jq -Rn \
             --arg event   "build_failure" \
@@ -150,10 +145,10 @@ jobs:
             --arg ref     "${{ github.ref_name }}" \
             --arg actor   "${{ github.actor }}" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,error:[inputs]|join("\n")}')" > /tmp/webhook-payload.json
-          SIG=$(openssl dgst -sha256 -hmac "$SECRET_KEY" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
+          SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
           curl -fsSL -X POST \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: build_failure" \
             -H "X-Hub-Signature-256: $SIG" \
-            -d @/tmp/webhook-payload.json \
+            --data-binary @/tmp/webhook-payload.json \
             "https://webhook.akinus21.com/webhook/akai-net-build" || true
