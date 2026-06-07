@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
 
     let hub_port: u16 = std::env::var("HUB_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080);
     let worker_port: u16 = std::env::var("WORKER_PORT").unwrap_or_else(|_| "50051".to_string()).parse().unwrap_or(50051);
-    let hub_vpn_addr = std::env::var("HUB_VPN_ADDR").unwrap_or_else(|_| format!("10.8.0.1:{}", hub_port));
+    let hub_vpn_addr = std::env::var("HUB_VPN_ADDR").unwrap_or_else(|_| format!("10.8.0.1:{}", worker_port));
     let admin_users = parse_admin_users();
     let _queue_addr = std::env::var("QUEUE_ADDR").unwrap_or_else(|_| "http://ollama-queue:50053".to_string());
     let hub_id = std::env::var("HUB_ID").unwrap_or_else(|_| "hub-1".to_string());
@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
     let hb_streams = worker_streams.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            tokio::time::sleep(Duration::from_secs(15)).await;
             if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams, &hb_vpn_addr).await {
                 warn!("Heartbeat cascade failed: {}", e);
             }
