@@ -14,6 +14,7 @@ use tracing::{info, warn, error};
 type WorkerMap = Arc<RwLock<HashMap<String, WorkerInfo>>>;
 type WorkerStreams = Arc<RwLock<HashMap<String, Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>>>>;
 type PendingInferences = Arc<Mutex<HashMap<String, oneshot::Sender<InferenceResponse>>>>;
+type MissedHeartbeats = Arc<Mutex<HashMap<String, u32>>>;
 
 struct HubState {
     model: ModelConfig,
@@ -84,12 +85,16 @@ async fn main() -> Result<()> {
     let workers: WorkerMap = Arc::new(RwLock::new(HashMap::new()));
     let worker_streams: WorkerStreams = Arc::new(RwLock::new(HashMap::new()));
     let pending_inferences: PendingInferences = Arc::new(Mutex::new(HashMap::new()));
+    let missed_heartbeats: MissedHeartbeats = Arc::new(Mutex::new(HashMap::new()));
+    let cascade_responded: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // Worker protocol server
     let worker_workers = workers.clone();
     let worker_streams_clone = worker_streams.clone();
     let worker_state = state.clone();
     let worker_pending = pending_inferences.clone();
+    let worker_missed = missed_heartbeats.clone();
+    let worker_responded = cascade_responded.clone();
     let hb_vpn_addr = hub_http_vpn_addr.clone();
     let http_worker_vpn_addr = hub_vpn_addr.clone();
     let http_http_vpn_addr = hub_http_vpn_addr.clone();
@@ -112,10 +117,12 @@ async fn main() -> Result<()> {
                     let streams = worker_streams_clone.clone();
                     let state = worker_state.clone();
                     let pending = worker_pending.clone();
+                    let missed = worker_missed.clone();
+                    let responded = worker_responded.clone();
                     let wp_vpn_addr = wp_vpn_addr.clone();
                     let wp_http_vpn_addr = wp_http_vpn_addr.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, wp_vpn_addr, wp_http_vpn_addr).await {
+                        if let Err(e) = handle_worker_connection(stream, addr, workers, streams, state, pending, wp_vpn_addr, wp_http_vpn_addr, missed, responded).await {
                             error!("Worker connection error: {}", e);
                         }
                     });
@@ -125,14 +132,18 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start heartbeat cascade timer (every 60 seconds)
+    // Start heartbeat cascade timer (every 15 seconds)
     let hb_workers = workers.clone();
     let hb_state = state.clone();
     let hb_streams = worker_streams.clone();
+    let hb_missed = missed_heartbeats.clone();
+    let hb_responded = cascade_responded.clone();
+    let hb_wg_password = wg_easy_password.clone();
+    let hb_wg_host = wg_easy_host.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(15)).await;
-            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams, &hb_vpn_addr).await {
+            if let Err(e) = initiate_heartbeat_cascade(&hb_workers, &hb_state, &hb_streams, &hb_vpn_addr, &hb_missed, &hb_responded, &hb_wg_password, &hb_wg_host).await {
                 warn!("Heartbeat cascade failed: {}", e);
             }
         }
@@ -167,6 +178,10 @@ async fn initiate_heartbeat_cascade(
     state: &HubStateRef,
     streams: &WorkerStreams,
     hub_http_vpn_addr: &str,
+    missed_hbs: &MissedHeartbeats,
+    cascade_responded: &Arc<Mutex<HashMap<String, bool>>>,
+    wg_password: &str,
+    wg_host: &str,
 ) -> Result<()> {
     let pipeline = {
         let workers_guard = workers.read().await;
@@ -198,6 +213,16 @@ async fn initiate_heartbeat_cascade(
         pipeline
     };
 
+    // Mark all known workers as not-yet-responded for this cascade
+    {
+        let mut responded = cascade_responded.lock().await;
+        responded.clear();
+        let workers_guard = workers.read().await;
+        for worker_id in workers_guard.keys() {
+            responded.insert(worker_id.clone(), false);
+        }
+    }
+
     // Send HeartbeatForward to first worker through its persistent connection
     if let Some(first) = pipeline.workers.first() {
         let streams_guard = streams.read().await;
@@ -223,6 +248,75 @@ async fn initiate_heartbeat_cascade(
         }
     }
 
+    // Wait up to 14 seconds for cascade responses
+    tokio::time::sleep(Duration::from_secs(14)).await;
+
+    // Check which workers responded, increment missed counters for non-responders
+    let mut to_deregister: Vec<String> = Vec::new();
+    {
+        let responded = cascade_responded.lock().await;
+        let mut missed_guard = missed_hbs.lock().await;
+        for (worker_id, &did_respond) in responded.iter() {
+            if did_respond {
+                missed_guard.insert(worker_id.clone(), 0);
+            } else {
+                let count = missed_guard.entry(worker_id.clone()).or_insert(0);
+                *count += 1;
+                warn!("[cascade] {} missed heartbeat ({} consecutive)", worker_id, *count);
+                if *count >= 2 {
+                    to_deregister.push(worker_id.clone());
+                }
+            }
+        }
+    }
+
+    // Deregister workers with 2+ consecutive misses
+    if !to_deregister.is_empty() {
+        for worker_id in &to_deregister {
+            warn!("[deregister] Removing worker {} after 2 consecutive missed heartbeats", worker_id);
+
+            // Remove from workers and streams
+            let removed_worker = {
+                let mut workers_guard = workers.write().await;
+                workers_guard.remove(worker_id)
+            };
+            {
+                let mut streams_guard = streams.write().await;
+                streams_guard.remove(worker_id);
+            }
+
+            // Remove from missed counter
+            {
+                let mut missed_guard = missed_hbs.lock().await;
+                missed_guard.remove(worker_id);
+            }
+
+            // Try to kill VPN connection via wg-easy
+            if let Some(ref worker_info) = removed_worker {
+                if !worker_info.wg_peer_id.is_empty() && !wg_password.is_empty() {
+                    match remove_wireguard_client(wg_host, wg_password, &worker_info.wg_peer_id).await {
+                        Ok(()) => info!("[deregister] VPN peer {} removed", worker_info.wg_peer_id),
+                        Err(e) => warn!("[deregister] Failed to remove VPN peer {}: {}", worker_info.wg_peer_id, e),
+                    }
+                }
+            }
+        }
+
+        // Redistribute layers for remaining workers
+        let workers_guard = workers.read().await;
+        let state_guard = state.lock().await;
+        if !workers_guard.is_empty() {
+            let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+            let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
+            info!("[redistribute] {} workers remaining, new assignments:", workers_guard.len());
+            for (id, offset, layers) in &assignments {
+                info!("[redistribute]   {} -> layers {}-{}", id, offset, offset + layers);
+            }
+        } else {
+            warn!("[redistribute] No workers remaining");
+        }
+    }
+
     Ok(())
 }
 
@@ -241,6 +335,8 @@ async fn handle_worker_connection(
     pending: PendingInferences,
     hub_vpn_addr: String,
     hub_http_vpn_addr: String,
+    missed_hbs: MissedHeartbeats,
+    cascade_responded: Arc<Mutex<HashMap<String, bool>>>,
 ) -> Result<()> {
     let (reader, writer) = stream.into_split();
     let mut reader = reader;
@@ -256,6 +352,8 @@ async fn handle_worker_connection(
                 info!("Worker {} disconnected", id);
                 workers.write().await.remove(id);
                 streams.write().await.remove(id);
+                missed_hbs.lock().await.remove(id);
+                cascade_responded.lock().await.remove(id);
                 info!("Removed {} from workers and streams", id);
             } else {
                 info!("Worker disconnected");
@@ -292,11 +390,14 @@ async fn handle_worker_connection(
                     info!("Streams map now has {} entries", streams_guard.len());
                 }
 
-                // Insert worker info
+                // Insert worker info and reset missed counter
                 {
                     let mut workers_guard = workers.write().await;
                     workers_guard.insert(info.id.clone(), info.clone());
                     info!("Workers HashMap now has {} entries", workers_guard.len());
+                }
+                {
+                    missed_hbs.lock().await.insert(info.id.clone(), 0);
                 }
 
                 current_worker_id = Some(info.id.clone());
@@ -354,6 +455,17 @@ async fn handle_worker_connection(
             HubMessage::Heartbeat(hb) => {
                 info!("[<- {}] Heartbeat: load={:.2}, last_hop_conn={}, next_hop_conn={}",
                     hb.worker_id, hb.load, hb.last_hop_connected, hb.next_hop_connected);
+                
+                // Mark worker as responded for this cascade
+                {
+                    let mut responded = cascade_responded.lock().await;
+                    responded.insert(hb.worker_id.clone(), true);
+                }
+                // Reset missed heartbeat counter
+                {
+                    let mut missed_guard = missed_hbs.lock().await;
+                    missed_guard.insert(hb.worker_id.clone(), 0);
+                }
                 
                 // Update worker info with latest capability
                 {
@@ -1124,4 +1236,40 @@ async fn create_wireguard_client(wg_easy_host: &str, wg_easy_password: &str, nam
     let config_text = config_resp.text().await?;
 
     Ok((client_id, config_text))
+}
+
+async fn remove_wireguard_client(wg_easy_host: &str, wg_easy_password: &str, client_id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", wg_easy_host);
+
+    let login_resp = client.post(format!("{}/api/session", base))
+        .json(&serde_json::json!({"password": wg_easy_password}))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?;
+
+    if !login_resp.status().is_success() {
+        anyhow::bail!("wg-easy auth failed: {}", login_resp.status());
+    }
+
+    let cookies: Vec<String> = login_resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .filter_map(|v| v.split(';').next())
+        .map(|s| s.trim().to_string())
+        .collect();
+    let cookie_header = cookies.join("; ");
+
+    let delete_resp = client.delete(format!("{}/api/wireguard/client/{}", base, client_id))
+        .header("cookie", &cookie_header)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?;
+
+    if !delete_resp.status().is_success() {
+        anyhow::bail!("wg-easy delete client failed: {}", delete_resp.status());
+    }
+
+    Ok(())
 }
