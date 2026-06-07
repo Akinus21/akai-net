@@ -249,8 +249,8 @@ async fn initiate_heartbeat_cascade(
             }
         }
 
-        let workers_guard = workers.read().await;
         let state_guard = state.lock().await;
+        let workers_guard = workers.read().await;
         if !workers_guard.is_empty() {
             let worker_list: Vec<_> = workers_guard.values().cloned().collect();
             let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
@@ -265,8 +265,8 @@ async fn initiate_heartbeat_cascade(
 
     let pipeline = {
         info!("Cascade: building pipeline info");
-        let workers_guard = workers.read().await;
         let state_guard = state.lock().await;
+        let workers_guard = workers.read().await;
         let worker_list: Vec<_> = workers_guard.values().cloned().collect();
         let stream_count = streams.read().await.len();
         
@@ -481,13 +481,15 @@ async fn handle_worker_connection(
                     }
                 }
                 
+                let model_name = state.lock().await.model.name.clone();
+                
                 // Log cascade complete if last worker
                 let is_last = {
                     let workers_guard = workers.read().await;
                     let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                     let pipeline = build_pipeline_info(
                         &worker_list,
-                        &state.lock().await.model.name,
+                        &model_name,
                         &state.lock().await.model_url,
                         state.lock().await.model.num_layers,
                     );
