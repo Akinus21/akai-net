@@ -166,7 +166,7 @@ async fn initiate_heartbeat_cascade(
         }
         
         if stream_count == 0 {
-            info!("Cascade: no worker streams available");
+            warn!("Cascade: {} workers but 0 streams", worker_list.len());
             return Ok(());
         }
         
