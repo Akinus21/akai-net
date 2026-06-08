@@ -277,6 +277,9 @@ async fn initiate_heartbeat_cascade(
         let state_guard = state.lock().await;
         let workers_guard = workers.read().await;
         let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+        drop(workers_guard);
+        drop(state_guard);
+        
         let stream_count = streams.read().await.len();
         
         if worker_list.is_empty() {
@@ -289,6 +292,7 @@ async fn initiate_heartbeat_cascade(
             return Ok(());
         }
         
+        let state_guard = state.lock().await;
         let proxy_url = model_proxy_url(hub_http_vpn_addr);
         let mut pipeline = build_pipeline_info(
             &worker_list,
@@ -296,6 +300,7 @@ async fn initiate_heartbeat_cascade(
             &proxy_url,
             state_guard.model.num_layers,
         );
+        drop(state_guard);
         info!("Cascade: {} workers, {} streams, first={}", 
               worker_list.len(), stream_count,
               pipeline.workers.first().map(|w| w.worker_id.as_str()).unwrap_or("none"));
@@ -416,9 +421,9 @@ async fn handle_worker_connection(
 
                 // Recalculate assignments
                 let (layer_offset, num_layers) = {
+                    let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
                     let worker_list: Vec<_> = workers_guard.values().cloned().collect();
-                    let state_guard = state.lock().await;
                     let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
                     assignments.iter()
                         .find(|(id, _, _)| id == &info.id)
@@ -436,13 +441,14 @@ async fn handle_worker_connection(
                 }
 
                 // Build pipeline info to send (use proxy URL for model downloads)
-                let (model_name, _model_url_raw, num_layers_total) = {
+                let (model_name, _model_url_raw, num_layers_total, model_hash) = {
                     let state_guard = state.lock().await;
-                    (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
+                    (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers, state_guard.model_hash.clone())
                 };
                 let proxy_url = model_proxy_url(&hub_http_vpn_addr);
                 let workers_guard = workers.read().await;
                 let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                drop(workers_guard);
                 let pipeline = build_pipeline_info(&worker_list, &model_name, &proxy_url, num_layers_total);
 
                 // Send heartbeat response with assignment + pipeline via persistent connection
@@ -452,7 +458,7 @@ async fn handle_worker_connection(
                     reassign: false,
                     model_name: model_name.clone(),
                     model_url: proxy_url,
-                    model_hash: state.lock().await.model_hash.clone(),
+                    model_hash,
                     pipeline: Some(pipeline.clone()),
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
@@ -491,18 +497,24 @@ async fn handle_worker_connection(
                     }
                 }
                 
-                let model_name = state.lock().await.model.name.clone();
+                let (model_name, model_url_raw, num_layers) = {
+                    let state_guard = state.lock().await;
+                    (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
+                };
                 
                 // Log cascade complete if last worker
                 let is_last = {
+                    let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
                     let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                     let pipeline = build_pipeline_info(
                         &worker_list,
                         &model_name,
-                        &state.lock().await.model_url,
-                        state.lock().await.model.num_layers,
+                        &model_url_raw,
+                        state_guard.model.num_layers,
                     );
+                    drop(state_guard);
+                    drop(workers_guard);
                     pipeline.workers.iter().any(|w| w.worker_id == hb.worker_id && w.is_last)
                 };
                 
@@ -512,31 +524,39 @@ async fn handle_worker_connection(
                 
                 // Send acknowledgment with current pipeline
                 let pipeline = {
+                    let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
                     let worker_list: Vec<_> = workers_guard.values().cloned().collect();
-                    let state_guard = state.lock().await;
+                    drop(workers_guard);
                     if worker_list.is_empty() {
+                        drop(state_guard);
                         None
                     } else {
                         let proxy_url = model_proxy_url(&hub_http_vpn_addr);
-                        Some(build_pipeline_info(
+                        let pipeline = build_pipeline_info(
                             &worker_list,
                             &state_guard.model.name,
                             &proxy_url,
                             state_guard.model.num_layers,
-                        ))
+                        );
+                        drop(state_guard);
+                        Some(pipeline)
                     }
                 };
                 
                 let pipeline_count = pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0);
                 let proxy_url = model_proxy_url(&hub_http_vpn_addr);
+                let (model_name2, model_hash) = {
+                    let state_guard = state.lock().await;
+                    (state_guard.model.name.clone(), state_guard.model_hash.clone())
+                };
                 let response = HeartbeatResponse {
                     layer_offset: hb.layer_offset,
                     num_layers: hb.num_layers,
                     reassign: false,
-                    model_name: state.lock().await.model.name.clone(),
+                    model_name: model_name2,
                     model_url: proxy_url,
-                    model_hash: state.lock().await.model_hash.clone(),
+                    model_hash,
                     pipeline,
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
@@ -946,14 +966,16 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                     }
                 } else if path.starts_with("GET /pipeline/status") {
                     // Return current pipeline registry for monitoring
-                    let workers_guard = workers.read().await;
                     let state_guard = state.lock().await;
+                    let workers_guard = workers.read().await;
                     let pipeline = build_pipeline_info(
                         &workers_guard.values().cloned().collect::<Vec<_>>(),
                         &state_guard.model.name,
                         &state_guard.model_url,
                         state_guard.model.num_layers,
                     );
+                    drop(workers_guard);
+                    drop(state_guard);
                     (200, serde_json::to_string(&pipeline).unwrap_or_default())
                 } else if path.starts_with("GET /model/download") {
                     let state_guard = state.lock().await;
@@ -1015,8 +1037,8 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                             info!("Chat completion request: model={}, messages={}, max_tokens={}", model, messages.len(), max_tokens);
 
                             // Find first worker in pipeline
-                            let workers_guard = workers.read().await;
                             let state_guard = state.lock().await;
+                            let workers_guard = workers.read().await;
                             let worker_list: Vec<_> = workers_guard.values().cloned().collect();
                             let pipeline = build_pipeline_info(
                                 &worker_list,
@@ -1025,6 +1047,7 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                                 state_guard.model.num_layers,
                             );
                             drop(state_guard);
+                            drop(workers_guard);
 
                             let first_worker = pipeline.workers.first();
                             if first_worker.is_none() {
