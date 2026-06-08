@@ -23,20 +23,28 @@ jobs:
 
       - name: Collect logs from GitHub API
         run: |
-          if [ ! -f /tmp/logs/build-errors.txt ]; then
+          LOG_FILE=""
+          for f in /tmp/logs/docker-build.log /tmp/logs/build-errors.txt; do
+            if [ -f "$f" ]; then
+              LOG_FILE="$f"
+              break
+            fi
+          done
+          if [ -z "$LOG_FILE" ]; then
             mkdir -p /tmp/logs
             RUN_ID="${{ github.event.workflow_run.id }}"
             LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || echo "Failed to fetch logs")
             echo "$LOGS" > /tmp/logs/build-errors.txt
+            LOG_FILE=/tmp/logs/build-errors.txt
           fi
-          cat /tmp/logs/build-errors.txt || echo "No logs available"
+          cat "$LOG_FILE" || echo "No logs available"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload full logs to pasty
         id: pasty
         run: |
-          CONTENT=$(cat /tmp/logs/build-errors.txt 2>/dev/null || echo "No build logs available")
+          CONTENT=$(cat /tmp/logs/docker-build.log 2>/dev/null || cat /tmp/logs/build-errors.txt 2>/dev/null || echo "No build logs available")
           PAYLOAD=$(printf '%s' "$CONTENT" | jq -Rs '{content: .}')
           PASTE_ID=""
           for i in $(seq 1 20); do
@@ -58,8 +66,14 @@ jobs:
       - name: Extract error context
         id: errors
         run: |
-          LOG_FILE="/tmp/logs/build-errors.txt"
-          if [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
+          LOG_FILE=""
+          for f in /tmp/logs/docker-build.log /tmp/logs/build-errors.txt; do
+            if [ -f "$f" ] && [ -s "$f" ]; then
+              LOG_FILE="$f"
+              break
+            fi
+          done
+          if [ -z "$LOG_FILE" ]; then
             echo "error_context=Docker build failed. No detailed logs available." >> $GITHUB_OUTPUT
             exit 0
           fi

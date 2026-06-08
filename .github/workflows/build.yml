@@ -50,18 +50,21 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-          tags: |
-            ghcr.io/akinus21/akai-net:latest
-            ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version || 'pr' }}
-          no-cache: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            LLAMACPP_VERSION=a8681a0
+        run: |
+          PUSH_FLAG=""
+          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            PUSH_FLAG="--push"
+          fi
+          docker buildx build \
+            --progress=plain \
+            --no-cache \
+            --build-arg LLAMACPP_VERSION=a8681a0 \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            -t ghcr.io/akinus21/akai-net:latest \
+            -t ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version || 'pr' }} \
+            $PUSH_FLAG \
+            . 2>&1 | tee /tmp/docker-build.log
 
       - name: Create git tag and GitHub release
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -93,8 +96,8 @@ jobs:
             echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
             echo "ANDROID_HOME=$ANDROID_HOME"
             echo ""
-            echo "=== Docker build ==="
-            echo "Docker build failed. No detailed logs available."
+            echo "=== Docker build log ==="
+            cat /tmp/docker-build.log 2>/dev/null || echo "No build log captured"
           } > /tmp/build-errors.txt
           cat /tmp/build-errors.txt
 
@@ -103,5 +106,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: /tmp/build-errors.txt
+          path: /tmp/docker-build.log
           retention-days: 5
