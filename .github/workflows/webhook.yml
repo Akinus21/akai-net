@@ -38,7 +38,7 @@ jobs:
         run: |
           CONTENT=$(cat /tmp/logs/build-errors.txt 2>/dev/null || echo "No build logs available")
           PASTE_ID=$(printf '%s' "$CONTENT" | jq -Rs '{content: .}' | \
-            curl -fsSL --retry 3 --retry-delay 5 \
+            curl -fsSL --retry 20 --retry-delay 2 --retry-all-errors \
               -X POST \
               -H "Content-Type: application/json" \
               -d @- \
@@ -96,7 +96,7 @@ jobs:
             --arg pasty_url "$PASTY_URL" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,pasty_url:$pasty_url,error:[inputs]|join("\n")}')" > /tmp/webhook-payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --retry 3 --retry-delay 5 -X POST \
+          curl -fsSL --retry 20 --retry-delay 2 --retry-all-errors -X POST \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: build_failure" \
             -H "X-Hub-Signature-256: $SIG" \
@@ -121,7 +121,7 @@ jobs:
             --arg actor  "${{ github.event.workflow_run.actor.login }}" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor}')" > /tmp/webhook-payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --retry 3 --retry-delay 5 -X POST \
+          curl -fsSL --retry 20 --retry-delay 2 --retry-all-errors -X POST \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: build_success" \
             -H "X-Hub-Signature-256: $SIG" \
