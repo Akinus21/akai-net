@@ -497,7 +497,7 @@ async fn handle_worker_connection(
                     }
                 }
                 
-                let (model_name, model_url_raw, num_layers) = {
+                let (model_name, model_url_raw, _num_layers) = {
                     let state_guard = state.lock().await;
                     (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers)
                 };
@@ -667,8 +667,8 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                 let body = body_start.map(|start| request[start..].trim()).unwrap_or("");
 
                 let (status, resp_body) = if path.starts_with("GET /health") {
-                    let workers_guard = workers.read().await;
                     let state_guard = state.lock().await;
+                    let workers_guard = workers.read().await;
                     let worker_list: Vec<_> = workers_guard
                         .values()
                         .map(|w| {
@@ -688,6 +688,8 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
                         "num_layers": state_guard.model.num_layers,
                         "workers": worker_list,
                     });
+                    drop(workers_guard);
+                    drop(state_guard);
                     (200, serde_json::to_string(&resp).unwrap_or_default())
                 } else if path.starts_with("GET /v1/models") {
                     let model_name = state.lock().await.model.name.clone();
@@ -1051,7 +1053,6 @@ async fn start_http_server(port: u16, worker_port: u16, workers: WorkerMap, stat
 
                             let first_worker = pipeline.workers.first();
                             if first_worker.is_none() {
-                                drop(workers_guard);
                                 let resp = serde_json::json!({
                                     "error": {"message": "No workers available", "type": "server_error"}
                                 });
