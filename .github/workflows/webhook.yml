@@ -1,0 +1,129 @@
+name: Webhook Notification
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types: [completed]
+
+permissions:
+  actions: read
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build logs
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          name: build-logs
+          path: /tmp/logs
+        continue-on-error: true
+
+      - name: Collect logs from GitHub API
+        run: |
+          if [ ! -f /tmp/logs/build-errors.txt ]; then
+            mkdir -p /tmp/logs
+            RUN_ID="${{ github.event.workflow_run.id }}"
+            LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || echo "Failed to fetch logs")
+            echo "$LOGS" > /tmp/logs/build-errors.txt
+          fi
+          cat /tmp/logs/build-errors.txt || echo "No logs available"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload full logs to pasty
+        id: pasty
+        run: |
+          CONTENT=$(cat /tmp/logs/build-errors.txt 2>/dev/null || echo "No build logs available")
+          PASTE_ID=$(printf '%s' "$CONTENT" | jq -Rs '{content: .}' | \
+            curl -fsSL --retry 3 --retry-delay 5 \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -d @- \
+              "https://paste.akinus21.com/api/v2/pastes" | jq -r '.id // empty')
+          if [ -z "$PASTE_ID" ]; then
+            echo "pasty_url=https://paste.akinus21.com/unknown" >> $GITHUB_OUTPUT
+            echo "pasty_id=unknown" >> $GITHUB_OUTPUT
+          else
+            echo "pasty_url=https://paste.akinus21.com/${PASTE_ID}" >> $GITHUB_OUTPUT
+            echo "pasty_id=${PASTE_ID}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract error context
+        id: errors
+        run: |
+          LOG_FILE="/tmp/logs/build-errors.txt"
+          if [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
+            echo "error_context=Docker build failed. No detailed logs available." >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          ERROR_LINES=$(grep -n -i 'error\|failed\|fatal\|panic\|cannot find' "$LOG_FILE" | head -5 | cut -d: -f1)
+          if [ -z "$ERROR_LINES" ]; then
+            CONTEXT=$(tail -25 "$LOG_FILE")
+          else
+            CONTEXT=""
+            for LINE in $ERROR_LINES; do
+              START=$((LINE - 12))
+              END=$((LINE + 12))
+              [ $START -lt 1 ] && START=1
+              CHUNK=$(sed -n "${START},${END}p" "$LOG_FILE")
+              CONTEXT="${CONTEXT}
+          --- error near line ${LINE} ---
+          ${CHUNK}"
+            done
+            CONTEXT=$(echo "$CONTEXT" | tail -50)
+          fi
+          echo "error_context<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTEXT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Notify webhook — failure
+        env:
+          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
+        run: |
+          RUN_URL="https://github.com/${{ github.event.workflow_run.repository.full_name }}/actions/runs/${{ github.event.workflow_run.id }}"
+          PASTY_URL="${{ steps.pasty.outputs.pasty_url }}"
+          ERROR_CONTEXT="${{ steps.errors.outputs.error_context }}"
+          printf '%s' "$(printf '%s' "$ERROR_CONTEXT" | jq -Rn \
+            --arg event     "build_failure" \
+            --arg repo      "${{ github.event.workflow_run.repository.full_name }}" \
+            --arg run_url   "$RUN_URL" \
+            --arg sha       "${{ github.event.workflow_run.head_sha }}" \
+            --arg ref       "${{ github.event.workflow_run.head_branch }}" \
+            --arg actor     "${{ github.event.workflow_run.actor.login }}" \
+            --arg pasty_url "$PASTY_URL" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,pasty_url:$pasty_url,error:[inputs]|join("\n")}')" > /tmp/webhook-payload.json
+          SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
+          curl -fsSL --retry 3 --retry-delay 5 -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: build_failure" \
+            -H "X-Hub-Signature-256: $SIG" \
+            --data-binary @/tmp/webhook-payload.json \
+            "https://webhook.akinus21.com/webhook/akai-net-build" || true
+
+  notify-success:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify webhook — success
+        env:
+          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
+        run: |
+          RUN_URL="https://github.com/${{ github.event.workflow_run.repository.full_name }}/actions/runs/${{ github.event.workflow_run.id }}"
+          printf '%s' "$(jq -cn \
+            --arg event  "build_success" \
+            --arg repo   "${{ github.event.workflow_run.repository.full_name }}" \
+            --arg run_url "$RUN_URL" \
+            --arg sha    "${{ github.event.workflow_run.head_sha }}" \
+            --arg ref    "${{ github.event.workflow_run.head_branch }}" \
+            --arg actor  "${{ github.event.workflow_run.actor.login }}" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor}')" > /tmp/webhook-payload.json
+          SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
+          curl -fsSL --retry 3 --retry-delay 5 -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: build_success" \
+            -H "X-Hub-Signature-256: $SIG" \
+            --data-binary @/tmp/webhook-payload.json \
+            "https://webhook.akinus21.com/webhook/akai-net-build" || true

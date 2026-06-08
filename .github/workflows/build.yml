@@ -98,57 +98,10 @@ jobs:
           } > /tmp/build-errors.txt
           cat /tmp/build-errors.txt
 
-      - name: Notify webhook — success
-        if: >
-          success() &&
-          github.ref == 'refs/heads/main' &&
-          github.event_name != 'pull_request'
-        env:
-          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
-        run: |
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TAG="${{ steps.tag.outputs.new_tag }}"
-          IMAGE="ghcr.io/akinus21/akai-net:${{ steps.tag.outputs.version }}"
-          printf '%s' "$(jq -cn \
-            --arg event  "build_success" \
-            --arg repo   "${{ github.repository }}" \
-            --arg run_url "$RUN_URL" \
-            --arg sha    "${{ github.sha }}" \
-            --arg ref    "${{ github.ref_name }}" \
-            --arg actor  "${{ github.actor }}" \
-            --arg tag    "$TAG" \
-            --arg image  "$IMAGE" \
-            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,tag:$tag,image:$image}')" > /tmp/webhook-payload.json
-          SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --retry 3 --retry-delay 5 -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: build_success" \
-            -H "X-Hub-Signature-256: $SIG" \
-            --data-binary @/tmp/webhook-payload.json \
-            "https://webhook.akinus21.com/webhook/akai-net-build" || true
-
-      - name: Notify webhook — failure
+      - name: Upload build logs
         if: failure()
-        env:
-          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
-        run: |
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ERROR_TEXT="Docker build failed. See $RUN_URL"
-          if [ -f /tmp/build-errors.txt ]; then
-            ERROR_TEXT=$(head -80 /tmp/build-errors.txt)
-          fi
-          printf '%s' "$(printf '%s' "$ERROR_TEXT" | jq -Rn \
-            --arg event   "build_failure" \
-            --arg repo    "${{ github.repository }}" \
-            --arg run_url "$RUN_URL" \
-            --arg sha     "${{ github.sha }}" \
-            --arg ref     "${{ github.ref_name }}" \
-            --arg actor   "${{ github.actor }}" \
-            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,error:[inputs]|join("\n")}')" > /tmp/webhook-payload.json
-          SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --retry 3 --retry-delay 5 -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: build_failure" \
-            -H "X-Hub-Signature-256: $SIG" \
-            --data-binary @/tmp/webhook-payload.json \
-            "https://webhook.akinus21.com/webhook/akai-net-build" || true
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: /tmp/build-errors.txt
+          retention-days: 5
