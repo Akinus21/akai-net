@@ -51,6 +51,7 @@ jobs:
       - name: Build and push image
         id: build
         run: |
+          set -o pipefail
           PUSH_FLAG=""
           if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
             PUSH_FLAG="--push"
