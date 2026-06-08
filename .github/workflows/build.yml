@@ -109,3 +109,110 @@ jobs:
           name: build-logs
           path: /tmp/docker-build.log
           retention-days: 5
+
+  webhook-failure:
+    needs: [build]
+    if: failure()
+    runs-on: ubuntu-latest
+    name: Webhook Notification for Build #${{ github.run_number }}
+    steps:
+      - name: Download build logs
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.run_id }}
+          name: build-logs
+          path: /tmp/logs
+        continue-on-error: true
+
+      - name: Collect logs
+        run: |
+          LOG_FILE=""
+          for f in /tmp/logs/build.log /tmp/logs/build-errors.txt /tmp/docker-build.log; do
+            if [ -f "$f" ] && [ -s "$f" ]; then
+              LOG_FILE="$f"
+              break
+            fi
+          done
+          if [ -z "$LOG_FILE" ]; then
+            mkdir -p /tmp/logs
+            echo "No build logs available" > /tmp/logs/build.log
+            LOG_FILE=/tmp/logs/build.log
+          fi
+          echo "LOG_FILE=$LOG_FILE" >> $GITHUB_ENV
+          LINES=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+          echo "LOG_LINES=$LINES" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to pasty
+        id: pasty
+        run: |
+          python3 -c "$(echo 'aW1wb3J0IG9zLCBzdWJwcm9jZXNzLCBqc29uLCBzeXMKTE9HX0ZJTEUgPSBvcy5lbnZpcm9uLmdldCgnTE9HX0ZJTEUnLCAnL3RtcC9sb2dzL2J1aWxkLmxvZycpCmlmIG5vdCBvcy5wYXRoLmV4aXN0cyhMT0dfRklMRSkgb3Igb3MucGF0aC5nZXRzaXplKExPR19GSUxFKSA9PSAwOgogICAgcHJpbnQoJ3Bhc3R5X2lkcz1uby1sb2dzJykKICAgIHByaW50KCdwYXN0eV91cmw9aHR0cHM6Ly9wYXN0ZS5ha2ludXMyMS5jb20vbm8tbG9ncycpCiAgICBzeXMuZXhpdCgwKQp3aXRoIG9wZW4oTE9HX0ZJTEUsICdyJykgYXMgZjoKICAgIGxpbmVzID0gZi5yZWFkbGluZXMoKQp0b3RhbF9saW5lcyA9IGxlbihsaW5lcykKcHJpbnQoZidMb2cgaGFzIHt0b3RhbF9saW5lc30gbGluZXMnKQppZiB0b3RhbF9saW5lcyA9PSAwOgogICAgcHJpbnQoJ3Bhc3R5X2lkcz1uby1jb250ZW50JykKICAgIHByaW50KCdwYXN0eV91cmw9aHR0cHM6Ly9wYXN0ZS5ha2ludXMyMS5jb20vbm8tbG9ncycpCiAgICBzeXMuZXhpdCgwKQpwYXN0eV9pZHMgPSBbXQpjaHVua19zaXplID0gMjAwMApmb3Igc3RhcnQgaW4gcmFuZ2UoMCwgdG90YWxfbGluZXMsIGNodW5rX3NpemUpOgogICAgZW5kID0gbWluKHN0YXJ0ICsgY2h1bmtfc2l6ZSwgdG90YWxfbGluZXMpCiAgICBjaHVuayA9ICcnLmpvaW4obGluZXNbc3RhcnQ6ZW5kXSkKICAgIHBheWxvYWQgPSBqc29uLmR1bXBzKHsnY29udGVudCc6IGNodW5rfSkKICAgIHBhc3RlX2lkID0gTm9uZQogICAgZm9yIGkgaW4gcmFuZ2UoMzApOgogICAgICAgIHRyeToKICAgICAgICAgICAgcmVzdWx0ID0gc3VicHJvY2Vzcy5ydW4oCiAgICAgICAgICAgICAgICBbJ2N1cmwnLCAnLXNTJywgJy1YJywgJ1BPU1QnLCAnLUgnLCAnQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uJywgJy1kJywgcGF5bG9hZCwKICAgICAgICAgICAgICAgICAnaHR0cHM6Ly9wYXN0ZS5ha2ludXMyMS5jb20vYXBpL3YyL3Bhc3RlcyddLAogICAgICAgICAgICAgICAgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwgdGV4dD1UcnVlLCB0aW1lb3V0PTEwKQogICAgICAgICAgICByZXNwID0ganNvbi5sb2FkcyhyZXN1bHQuc3Rkb3V0KQogICAgICAgICAgICBwYXN0ZV9pZCA9IHJlc3AuZ2V0KCdpZCcsICcnKQogICAgICAgICAgICBpZiBwYXN0ZV9pZDoKICAgICAgICAgICAgICAgIHByaW50KGYnVXBsb2FkZWQge3N0YXJ0KzF9LXtlbmR9IC0+IHtwYXN0ZV9pZH0nKQogICAgICAgICAgICAgICAgYnJlYWsKICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgICAgIHByaW50KGYnQXR0ZW1wdCB7aSsxfSBmYWlsZWQ6IHtlfScpCiAgICAgICAgaW1wb3J0IHRpbWU7IHRpbWUuc2xlZXAoMykKICAgIGlmIHBhc3RlX2lkOgogICAgICAgIHBhc3R5X2lkcy5hcHBlbmQocGFzdGVfaWQpCmlmIHBhc3R5X2lkczoKICAgIHByaW50KGYncGFzdHlfaWRzPXtjaHIoNDQpLmpvaW4ocGFzdHlfaWRzKX0nKQogICAgcHJpbnQoZidwYXN0eV91cmw9aHR0cHM6Ly9wYXN0ZS5ha2ludXMyMS5jb20ve3Bhc3R5X2lkc1swXX0nKQplbHNlOgogICAgcHJpbnQoJ3Bhc3R5X2lkcz1mYWlsZWQnKQogICAgcHJpbnQoJ3Bhc3R5X3VybD1odHRwczovL3Bhc3RlLmFraW51czIxLmNvbS9lcnJvcicpCg==' | base64 -d)"
+
+      - name: Extract errors (max 25 lines)
+        id: errors
+        run: |
+          LOG_FILE="${{ env.LOG_FILE }}"
+          if [ -z "$LOG_FILE" ] || [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
+            echo "error_context=Build failed. No logs available." >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          ERRORS=$(grep -n -iE 'error\[E[0-9]+\]|error:|fatal|cannot find|not found|compilation failed|FAILED' \
+            "$LOG_FILE" 2>/dev/null | head -5 | cut -d: -f1 | tr '\n' ' ')
+
+          if [ -z "$ERRORS" ]; then
+            CONTEXT=$(tail -25 "$LOG_FILE" 2>/dev/null)
+          else
+            CONTEXT=""
+            for LINE in $ERRORS; do
+              START=$((LINE - 3))
+              [ $START -lt 1 ] && START=1
+              CHUNK=$(sed -n "${START},$((LINE + 3))p" "$LOG_FILE" 2>/dev/null)
+              CONTEXT="${CONTEXT}--- error near line ${LINE} ---\n${CHUNK}\n"
+            done
+            CONTEXT=$(echo -e "$CONTEXT" | tail -25)
+          fi
+
+          echo "error_context<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTEXT" | head -25 >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Send webhook
+        env:
+          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_HMAC_SECRET }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          PASTY_URL: ${{ steps.pasty.outputs.pasty_url }}
+          BUILD_NUM: ${{ github.run_number }}
+          ERROR_CTX: ${{ steps.errors.outputs.error_context }}
+        run: |
+          jq -n \
+            --arg event "build_failure" \
+            --arg repo "$REPO" \
+            --arg run_url "$RUN_URL" \
+            --arg sha "$SHA" \
+            --arg ref "$REF" \
+            --arg actor "$ACTOR" \
+            --arg pasty_url "$PASTY_URL" \
+            --arg build_num "$BUILD_NUM" \
+            --arg error "$ERROR_CTX" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,pasty_url:$pasty_url,build_num:$build_num,error:$error}' > /tmp/payload.json
+          SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/payload.json | awk '{print "sha256="$2}')
+          for i in $(seq 1 60); do
+            if curl -fsSL -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-GitHub-Event: build_failure" \
+              -H "X-Hub-Signature-256: $SIG" \
+              --data-binary @/tmp/payload.json \
+              "https://webhook.akinus21.com/webhook/akai-net-build"; then
+              echo "Webhook sent successfully"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "Webhook failed after 60 attempts"
