@@ -493,11 +493,16 @@ async fn handle_worker_connection(
                         };
                         let msg = HubMessage::HeartbeatResponse(response);
                         if let Ok(data) = encode_msg(&msg) {
-                            if let Ok(mut w) = writer.try_lock().await {
-                                if w.write_all(&data).await.is_err() {
-                                    warn!("[hub] Failed to send pipeline update to {}", worker_id);
-                                } else {
-                                    info!("[-> {}] PipelineUpdate: {} workers (new peer registered)", worker_id, pipeline_clone.workers.len());
+                            match writer.try_lock() {
+                                Ok(mut w) => {
+                                    if w.write_all(&data).await.is_err() {
+                                        warn!("[hub] Failed to send pipeline update to {}", worker_id);
+                                    } else {
+                                        info!("[-> {}] PipelineUpdate: {} workers (new peer registered)", worker_id, pipeline_clone.workers.len());
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!("[hub] Could not lock writer for {}", worker_id);
                                 }
                             }
                         }
