@@ -190,6 +190,8 @@ jobs:
           BUILD_NUM: ${{ github.run_number }}
           ERROR_CTX: ${{ steps.errors.outputs.error_context }}
         run: |
+          printf -v MESSAGE 'The %s build in the %s branch failed with the following errors:\n\n%s\n\nThe full text can be found at the following pasty url(s):\n%s\n' \
+            "$REPO" "$REF" "$ERROR_CTX" "$PASTY_URL"
           jq -n \
             --arg event "build_failure" \
             --arg repo "$REPO" \
@@ -200,7 +202,8 @@ jobs:
             --arg pasty_url "$PASTY_URL" \
             --arg build_num "$BUILD_NUM" \
             --arg error "$ERROR_CTX" \
-            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,pasty_url:$pasty_url,build_num:$build_num,error:$error}' > /tmp/payload.json
+            --arg message "$MESSAGE" \
+            '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,pasty_url:$pasty_url,build_num:$build_num,error:$error,message:$message}' > /tmp/payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/payload.json | awk '{print "sha256="$2}')
           for i in $(seq 1 60); do
             if curl -fsSL -X POST \
