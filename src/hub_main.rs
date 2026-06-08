@@ -259,7 +259,14 @@ async fn initiate_heartbeat_cascade(
         }
 
         // Notify remaining workers about new layer assignments after deregistration
-        if !to_deregister.is_empty() && !workers_guard.is_empty() {
+        if !to_deregister.is_empty() {
+            let worker_list: Vec<_> = {
+                let workers_guard = workers.read().await;
+                if workers_guard.is_empty() {
+                    return Ok(());
+                }
+                workers_guard.values().cloned().collect()
+            };
             let proxy_url = model_proxy_url(&hub_http_vpn_addr);
             let (model_name, model_hash, num_layers_total) = {
                 let state_guard = state.lock().await;
