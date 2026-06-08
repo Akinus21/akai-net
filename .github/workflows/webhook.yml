@@ -114,12 +114,20 @@ jobs:
             --arg pasty_url "$PASTY_URL" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor,pasty_url:$pasty_url,error:[inputs]|join("\n")}')" > /tmp/webhook-payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --retry 20 --retry-delay 2 --retry-all-errors -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: build_failure" \
-            -H "X-Hub-Signature-256: $SIG" \
-            --data-binary @/tmp/webhook-payload.json \
-            "https://webhook.akinus21.com/webhook/akai-net-build" || true
+          for i in $(seq 1 60); do
+            if curl -fsSL -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-GitHub-Event: build_failure" \
+              -H "X-Hub-Signature-256: $SIG" \
+              --data-binary @/tmp/webhook-payload.json \
+              "https://webhook.akinus21.com/webhook/akai-net-build"; then
+              echo "Webhook sent successfully"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "Webhook failed after 60 attempts"
 
   notify-success:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
@@ -139,9 +147,17 @@ jobs:
             --arg actor  "${{ github.event.workflow_run.actor.login }}" \
             '{event:$event,repo:$repo,run_url:$run_url,sha:$sha,ref:$ref,actor:$actor}')" > /tmp/webhook-payload.json
           SIG=$(openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" /tmp/webhook-payload.json | awk '{print "sha256="$2}')
-          curl -fsSL --retry 20 --retry-delay 2 --retry-all-errors -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: build_success" \
-            -H "X-Hub-Signature-256: $SIG" \
-            --data-binary @/tmp/webhook-payload.json \
-            "https://webhook.akinus21.com/webhook/akai-net-build" || true
+          for i in $(seq 1 60); do
+            if curl -fsSL -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-GitHub-Event: build_success" \
+              -H "X-Hub-Signature-256: $SIG" \
+              --data-binary @/tmp/webhook-payload.json \
+              "https://webhook.akinus21.com/webhook/akai-net-build"; then
+              echo "Webhook sent successfully"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "Webhook failed after 60 attempts"
