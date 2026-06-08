@@ -468,8 +468,41 @@ async fn handle_worker_connection(
                     w.write_all(&data).await?;
                 }
 
-                info!("[-> {}] HeartbeatResponse: layers {}-{}, model={}, pipeline={}", 
+                info!("[-> {}] HeartbeatResponse: layers {}-{}, model={}, pipeline={}",
                     info.id, layer_offset, layer_offset + num_layers, model_name, pipeline.workers.len());
+
+                // Notify all OTHER workers about the updated pipeline
+                // This ensures existing workers learn about new peers immediately
+                let streams_clone = streams.clone();
+                let pipeline_clone = pipeline.clone();
+                let new_worker_id = info.id.clone();
+                tokio::spawn(async move {
+                    let streams_guard = streams_clone.read().await;
+                    for (worker_id, writer) in streams_guard.iter() {
+                        if worker_id == &new_worker_id {
+                            continue; // Skip the newly registered worker
+                        }
+                        let response = HeartbeatResponse {
+                            layer_offset: 0,
+                            num_layers: 0,
+                            reassign: false,
+                            model_name: pipeline_clone.model_name.clone(),
+                            model_url: pipeline_clone.model_url.clone(),
+                            model_hash: String::new(),
+                            pipeline: Some(pipeline_clone.clone()),
+                        };
+                        let msg = HubMessage::HeartbeatResponse(response);
+                        if let Ok(data) = encode_msg(&msg) {
+                            if let Ok(mut w) = writer.lock().await.try_lock() {
+                                if w.write_all(&data).await.is_err() {
+                                    warn!("[hub] Failed to send pipeline update to {}", worker_id);
+                                } else {
+                                    info!("[-> {}] PipelineUpdate: {} workers (new peer registered)", worker_id, pipeline_clone.workers.len());
+                                }
+                            }
+                        }
+                    }
+                });
             }
             HubMessage::Heartbeat(hb) => {
                 info!("[<- {}] Heartbeat: load={:.2}, last_hop_conn={}, next_hop_conn={}",
