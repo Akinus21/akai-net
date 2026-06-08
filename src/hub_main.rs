@@ -512,9 +512,13 @@ async fn handle_worker_connection(
                         if worker_id == &new_worker_id {
                             continue; // Skip the newly registered worker
                         }
+                        let (layer_offset, num_layers) = pipeline_clone.workers.iter()
+                            .find(|w| w.worker_id == *worker_id)
+                            .map(|w| (w.layer_offset, w.num_layers))
+                            .unwrap_or((0, 0));
                         let response = HeartbeatResponse {
-                            layer_offset: 0,
-                            num_layers: 0,
+                            layer_offset,
+                            num_layers,
                             reassign: false,
                             model_name: pipeline_clone.model_name.clone(),
                             model_url: pipeline_clone.model_url.clone(),
@@ -528,7 +532,7 @@ async fn handle_worker_connection(
                                     if w.write_all(&data).await.is_err() {
                                         warn!("[hub] Failed to send pipeline update to {}", worker_id);
                                     } else {
-                                        info!("[-> {}] PipelineUpdate: {} workers (new peer registered)", worker_id, pipeline_clone.workers.len());
+                                        info!("[-> {}] PipelineUpdate: {} workers, layers {}-{}", worker_id, pipeline_clone.workers.len(), layer_offset, layer_offset + num_layers);
                                     }
                                 }
                                 Err(_) => {
