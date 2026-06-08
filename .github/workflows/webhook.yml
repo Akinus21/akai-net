@@ -37,12 +37,16 @@ jobs:
         id: pasty
         run: |
           CONTENT=$(cat /tmp/logs/build-errors.txt 2>/dev/null || echo "No build logs available")
-          PASTE_ID=$(printf '%s' "$CONTENT" | jq -Rs '{content: .}' | \
-            curl -fsSL --retry 20 --retry-delay 2 --retry-all-errors \
-              -X POST \
+          PAYLOAD=$(printf '%s' "$CONTENT" | jq -Rs '{content: .}')
+          PASTE_ID=""
+          for i in $(seq 1 20); do
+            PASTE_ID=$(printf '%s' "$PAYLOAD" | curl -sS -X POST \
               -H "Content-Type: application/json" \
               -d @- \
-              "https://paste.akinus21.com/api/v2/pastes" | jq -r '.id // empty')
+              "https://paste.akinus21.com/api/v2/pastes" | jq -r '.id // empty') && break
+            echo "Pasty upload attempt $i failed, retrying in 2s..."
+            sleep 2
+          done
           if [ -z "$PASTE_ID" ]; then
             echo "pasty_url=https://paste.akinus21.com/unknown" >> $GITHUB_OUTPUT
             echo "pasty_id=unknown" >> $GITHUB_OUTPUT
