@@ -351,7 +351,7 @@ async fn handle_worker_connection(
     state: HubStateRef,
     pending: PendingInferences,
     _hub_vpn_addr: String,
-    _hub_http_vpn_addr: String,
+    hub_http_vpn_addr: String,
     missed_hbs: MissedHeartbeats,
     cascade_responded: Arc<Mutex<HashMap<String, bool>>>,
 ) -> Result<()> {
@@ -617,7 +617,7 @@ async fn handle_worker_connection(
     Ok(())
 }
 
-async fn start_http_server(port: u16, _worker_port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String, hub_worker_vpn_addr: String, hub_http_vpn_addr: String) -> Result<()> {
+async fn start_http_server(port: u16, _worker_port: u16, workers: WorkerMap, state: HubStateRef, streams: WorkerStreams, pending: PendingInferences, admin_users: Vec<String>, duo_config: Option<duo::DuoConfig>, tunnel_certs_dir: String, wg_easy_password: String, wg_easy_host: String, hub_worker_vpn_addr: String, _hub_http_vpn_addr: String) -> Result<()> {
     use tokio::net::TcpListener as HttpListener;
 
     let listener = HttpListener::bind(format!("0.0.0.0:{}", port)).await?;
