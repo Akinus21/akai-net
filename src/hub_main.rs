@@ -262,41 +262,42 @@ async fn initiate_heartbeat_cascade(
         if !to_deregister.is_empty() {
             let worker_list: Vec<_> = {
                 let workers_guard = workers.read().await;
-                if workers_guard.is_empty() {
-                    return Ok(());
-                }
                 workers_guard.values().cloned().collect()
             };
-            let proxy_url = model_proxy_url(&hub_http_vpn_addr);
-            let (model_name, model_hash, num_layers_total) = {
-                let state_guard = state.lock().await;
-                (state_guard.model.name.clone(), state_guard.model_hash.clone(), state_guard.model.num_layers)
-            };
-            let pipeline = build_pipeline_info(&worker_list, &model_name, &proxy_url, num_layers_total);
-            
-            for worker in &pipeline.workers {
-                let streams_guard = streams.read().await;
-                if let Some(writer) = streams_guard.get(&worker.worker_id) {
-                    let response = HeartbeatResponse {
-                        layer_offset: worker.layer_offset,
-                        num_layers: worker.num_layers,
-                        reassign: true,
-                        model_name: model_name.clone(),
-                        model_url: proxy_url.clone(),
-                        model_hash: model_hash.clone(),
-                        pipeline: Some(pipeline.clone()),
-                    };
-                    let msg = HubMessage::HeartbeatResponse(response);
-                    if let Ok(data) = encode_msg(&msg) {
-                        let mut w = writer.lock().await;
-                        if let Err(e) = w.write_all(&data).await {
-                            warn!("[deregister] Failed to notify {}: {}", worker.worker_id, e);
-                        } else {
-                            info!("[deregister] Notified {} of new assignment: layers {}-{}", 
-                                worker.worker_id, worker.layer_offset, worker.layer_offset + worker.num_layers);
+            if !worker_list.is_empty() {
+                let proxy_url = model_proxy_url(&hub_http_vpn_addr);
+                let (model_name, model_hash, num_layers_total) = {
+                    let state_guard = state.lock().await;
+                    (state_guard.model.name.clone(), state_guard.model_hash.clone(), state_guard.model.num_layers)
+                };
+                let pipeline = build_pipeline_info(&worker_list, &model_name, &proxy_url, num_layers_total);
+                
+                for worker in &pipeline.workers {
+                    let streams_guard = streams.read().await;
+                    if let Some(writer) = streams_guard.get(&worker.worker_id) {
+                        let response = HeartbeatResponse {
+                            layer_offset: worker.layer_offset,
+                            num_layers: worker.num_layers,
+                            reassign: true,
+                            model_name: model_name.clone(),
+                            model_url: proxy_url.clone(),
+                            model_hash: model_hash.clone(),
+                            pipeline: Some(pipeline.clone()),
+                        };
+                        let msg = HubMessage::HeartbeatResponse(response);
+                        if let Ok(data) = encode_msg(&msg) {
+                            let mut w = writer.lock().await;
+                            if let Err(e) = w.write_all(&data).await {
+                                warn!("[deregister] Failed to notify {}: {}", worker.worker_id, e);
+                            } else {
+                                info!("[deregister] Notified {} of new assignment: layers {}-{}", 
+                                    worker.worker_id, worker.layer_offset, worker.layer_offset + worker.num_layers);
+                            }
                         }
                     }
                 }
+            } else {
+                warn!("[deregister] No workers remaining after deregistration");
             }
         }
     }
