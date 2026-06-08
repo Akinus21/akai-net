@@ -1,7 +1,7 @@
 mod pipeline;
 
 use anyhow::Result;
-use pipeline::{HubMessage, WorkerInfo};
+use pipeline::{HubMessage, WorkerInfo, WorkerHeartbeat};
 use std::env;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
         .init();
 
     let hub_addr = env::var("HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:50051".to_string());
-    let worker_id = env::var("WORKER_ID").unwrap_or_else(|| "unknown-worker".to_string());
+    let worker_id = env::var("WORKER_ID").unwrap_or_else(|_| "unknown-worker".to_string());
     let has_gpu = env::var("HAS_GPU").unwrap_or_else(|_| "false".to_string()) == "true";
     let vram_gb = env::var("VRAM_GB").unwrap_or_else(|_| "0".to_string()).parse().unwrap_or(0.0);
     let layer_offset: usize = env::var("LAYER_OFFSET").unwrap_or_else(|_| "0".to_string()).parse().unwrap_or(0);
@@ -29,10 +29,17 @@ async fn main() -> Result<()> {
 
     let worker_info = WorkerInfo {
         id: worker_id.clone(),
+        name: String::new(),
         layer_offset,
         num_layers,
         vram_gb,
         has_gpu,
+        load: 0.0,
+        active: true,
+        wg_ip: String::new(),
+        wg_peer_id: String::new(),
+        models: vec![],
+        rpc_port: 0,
     };
 
     loop {
@@ -63,12 +70,18 @@ async fn main() -> Result<()> {
                         HubMessage::InferenceRequest(req) => {
                             info!("Received inference request {} ({} tokens)", req.id, req.tokens.len());
                         }
-                        HubMessage::Heartbeat { .. } => {
-                            let resp = HubMessage::Heartbeat {
+                        HubMessage::Heartbeat(_) => {
+                            let resp = HubMessage::Heartbeat(WorkerHeartbeat {
                                 worker_id: worker_id.clone(),
-                                load: 0.5,
+                                load: 0.0,
+                                layer_offset,
+                                num_layers,
+                                has_gpu,
+                                vram_gb,
                                 active: true,
-                            };
+                                last_hop_connected: false,
+                                next_hop_connected: false,
+                            });
                             let data = serde_json::to_vec(&resp)?;
                             stream.write_all(&data).await?;
                         }
