@@ -460,16 +460,12 @@ async fn handle_worker_connection(
                 }
 
                 current_worker_id = Some(info.id.clone());
-                info!("[<- {}] Processing registration...", info.id);
 
                 // Recalculate ALL assignments and update all workers
                 let (layer_offset, num_layers) = {
-                    info!("[<- {}] Acquiring state lock...", info.id);
                     let state_guard = state.lock().await;
-                    info!("[<- {}] Acquiring workers write lock...", info.id);
                     let mut workers_guard = workers.write().await;
                     let worker_list: Vec<_> = workers_guard.values().cloned().collect();
-                    info!("[<- {}] Calculating layer assignments for {} workers...", info.id, worker_list.len());
                     let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
                     
                     // Update ALL workers' layer info
@@ -479,19 +475,15 @@ async fn handle_worker_connection(
                             conn.num_layers = *num;
                         }
                     }
-                    info!("[<- {}] Updated {} workers' layer info", info.id, assignments.len());
                     
                     // Return this worker's assignment
-                    let my_assignment = assignments.iter()
+                    assignments.iter()
                         .find(|(id, _, _)| id == &info.id)
                         .map(|(_, offset, layers)| (*offset, *layers))
-                        .unwrap_or((0, 0));
-                    info!("[<- {}] My assignment: layers {}-{}", info.id, my_assignment.0, my_assignment.0 + my_assignment.1);
-                    my_assignment
+                        .unwrap_or((0, 0))
                 };
 
                 // Build pipeline info to send (use proxy URL for model downloads)
-                info!("[<- {}] Building pipeline info...", info.id);
                 let (model_name, _model_url_raw, num_layers_total, model_hash) = {
                     let state_guard = state.lock().await;
                     (state_guard.model.name.clone(), state_guard.model_url.clone(), state_guard.model.num_layers, state_guard.model_hash.clone())
@@ -518,7 +510,6 @@ async fn handle_worker_connection(
                     pipeline: Some(pipeline.clone()),
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
-                info!("[<- {}] Encoding HeartbeatResponse...", info.id);
                 let data = match encode_msg(&msg) {
                     Ok(d) => d,
                     Err(e) => {
@@ -526,7 +517,6 @@ async fn handle_worker_connection(
                         return Ok(());
                     }
                 };
-                info!("[<- {}] Sending HeartbeatResponse ({} bytes)...", info.id, data.len());
                 {
                     let mut w = writer.lock().await;
                     if let Err(e) = w.write_all(&data).await {
@@ -534,7 +524,6 @@ async fn handle_worker_connection(
                         return Ok(());
                     }
                 }
-                info!("[<- {}] HeartbeatResponse sent successfully", info.id);
 
                 info!("[-> {}] HeartbeatResponse: layers {}-{}, model={}, pipeline={}",
                     info.id, layer_offset, layer_offset + num_layers, model_name, pipeline.workers.len());
