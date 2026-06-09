@@ -183,6 +183,14 @@ pub fn calculate_layer_assignment(
         a_score.partial_cmp(&b_score).unwrap()
     });
 
+    // Debug: log sorted order
+    eprintln!("[calculate_layer_assignment] {} workers, {} layers:", sorted_workers.len(), total_layers);
+    for (i, w) in sorted_workers.iter().enumerate() {
+        let score = if w.has_gpu { w.vram_gb * 100.0 } else { 1.0 };
+        eprintln!("[calculate_layer_assignment]   worker[{}] {}: score={:.0}, current layers={}-{}", 
+            i, w.id, score, w.layer_offset, w.layer_offset + w.num_layers);
+    }
+
     let base = total_layers / sorted_workers.len();
     let remainder = total_layers % sorted_workers.len();
 
