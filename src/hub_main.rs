@@ -262,7 +262,13 @@ async fn initiate_heartbeat_cascade(
         if !to_deregister.is_empty() {
             let worker_list: Vec<_> = {
                 let workers_guard = workers.read().await;
-                workers_guard.values().cloned().collect()
+                let mut list: Vec<_> = workers_guard.values().cloned().collect();
+                list.sort_by(|a, b| {
+                    let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+                    let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+                    a_score.partial_cmp(&b_score).unwrap()
+                });
+                list
             };
             if !worker_list.is_empty() {
                 let proxy_url = model_proxy_url(&hub_http_vpn_addr);
@@ -324,8 +330,14 @@ async fn initiate_heartbeat_cascade(
         
         let state_guard = state.lock().await;
         let proxy_url = model_proxy_url(hub_http_vpn_addr);
+        let mut sorted_workers: Vec<_> = worker_list.clone();
+        sorted_workers.sort_by(|a, b| {
+            let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+            let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+            a_score.partial_cmp(&b_score).unwrap()
+        });
         let mut pipeline = build_pipeline_info(
-            &worker_list,
+            &sorted_workers,
             &state_guard.model.name,
             &proxy_url,
             state_guard.model.num_layers,
@@ -477,8 +489,13 @@ async fn handle_worker_connection(
                 };
                 let proxy_url = model_proxy_url(&hub_http_vpn_addr);
                 let workers_guard = workers.read().await;
-                let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
                 drop(workers_guard);
+                worker_list.sort_by(|a, b| {
+                    let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+                    let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+                    a_score.partial_cmp(&b_score).unwrap()
+                });
                 let pipeline = build_pipeline_info(&worker_list, &model_name, &proxy_url, num_layers_total);
 
                 // Send heartbeat response with assignment + pipeline via persistent connection
@@ -578,7 +595,12 @@ async fn handle_worker_connection(
                 let is_last = {
                     let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
-                    let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    worker_list.sort_by(|a, b| {
+                        let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+                        let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+                        a_score.partial_cmp(&b_score).unwrap()
+                    });
                     let pipeline = build_pipeline_info(
                         &worker_list,
                         &model_name,
@@ -598,8 +620,13 @@ async fn handle_worker_connection(
                 let pipeline = {
                     let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
-                    let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
                     drop(workers_guard);
+                    worker_list.sort_by(|a, b| {
+                        let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+                        let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+                        a_score.partial_cmp(&b_score).unwrap()
+                    });
                     if worker_list.is_empty() {
                         drop(state_guard);
                         None
@@ -1042,8 +1069,14 @@ async fn start_http_server(port: u16, _worker_port: u16, workers: WorkerMap, sta
                     // Return current pipeline registry for monitoring
                     let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
+                    let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                    worker_list.sort_by(|a, b| {
+                        let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+                        let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+                        a_score.partial_cmp(&b_score).unwrap()
+                    });
                     let pipeline = build_pipeline_info(
-                        &workers_guard.values().cloned().collect::<Vec<_>>(),
+                        &worker_list,
                         &state_guard.model.name,
                         &state_guard.model_url,
                         state_guard.model.num_layers,
@@ -1113,7 +1146,12 @@ async fn start_http_server(port: u16, _worker_port: u16, workers: WorkerMap, sta
                             // Find first worker in pipeline
                             let state_guard = state.lock().await;
                             let workers_guard = workers.read().await;
-                            let worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                            let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
+                            worker_list.sort_by(|a, b| {
+                                let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
+                                let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
+                                a_score.partial_cmp(&b_score).unwrap()
+                            });
                             let pipeline = build_pipeline_info(
                                 &worker_list,
                                 &state_guard.model.name,
