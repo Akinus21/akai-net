@@ -463,24 +463,22 @@ async fn handle_worker_connection(
 
                 current_worker_id = Some(info.id.clone());
 
-                // Recalculate assignments
-                let (layer_offset, num_layers) = {
+                // Recalculate ALL assignments and update all workers
+                let assignments = {
                     let state_guard = state.lock().await;
                     let workers_guard = workers.read().await;
                     let worker_list: Vec<_> = workers_guard.values().cloned().collect();
-                    let assignments = calculate_layer_assignment(&worker_list, state_guard.model.num_layers);
-                    assignments.iter()
-                        .find(|(id, _, _)| id == &info.id)
-                        .map(|(_, offset, layers)| (*offset, *layers))
-                        .unwrap_or((0, 0))
+                    calculate_layer_assignment(&worker_list, state_guard.model.num_layers)
                 };
-
-                // Update worker's layer info
+                
+                // Update ALL workers' layer info
                 {
                     let mut workers_guard = workers.write().await;
-                    if let Some(conn) = workers_guard.get_mut(&info.id) {
-                        conn.layer_offset = layer_offset;
-                        conn.num_layers = num_layers;
+                    for (id, offset, num) in &assignments {
+                        if let Some(conn) = workers_guard.get_mut(id) {
+                            conn.layer_offset = *offset;
+                            conn.num_layers = *num;
+                        }
                     }
                 }
 
