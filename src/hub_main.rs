@@ -453,7 +453,9 @@ async fn handle_worker_connection(
                 {
                     let mut workers_guard = workers.write().await;
                     workers_guard.insert(info.id.clone(), info.clone());
-                    info!("Workers HashMap now has {} entries", workers_guard.len());
+                    info!("Workers HashMap now has {} entries: {:?}", 
+                        workers_guard.len(),
+                        workers_guard.values().map(|w| format!("{}:{:.0}GB", w.id, w.vram_gb)).collect::<Vec<_>>());
                 }
                 {
                     missed_hbs.lock().await.insert(info.id.clone(), 0);
