@@ -577,13 +577,11 @@ async fn handle_worker_connection(
                     missed_guard.insert(hb.worker_id.clone(), 0);
                 }
                 
-                // Update worker info with latest capability
+                // Update worker info with latest capability (but preserve vram_gb from registration for sorting)
                 {
                     let mut workers_guard = workers.write().await;
                     if let Some(conn) = workers_guard.get_mut(&hb.worker_id) {
                         conn.load = hb.load;
-                        conn.has_gpu = hb.has_gpu;
-                        conn.vram_gb = hb.vram_gb;
                         conn.active = hb.active;
                     }
                 }
