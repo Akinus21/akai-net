@@ -408,14 +408,10 @@ async fn handle_worker_connection(
         let n = reader.read(&mut tmp).await?;
         if n == 0 {
             if let Some(ref id) = current_worker_id {
-                info!("Worker {} disconnected", id);
-                workers.write().await.remove(id);
+                info!("Worker {} connection closed (waiting for heartbeat cascade to deregister)", id);
                 streams.write().await.remove(id);
-                missed_hbs.lock().await.remove(id);
-                cascade_responded.lock().await.remove(id);
-                info!("Removed {} from workers and streams", id);
             } else {
-                info!("Worker disconnected");
+                info!("Worker connection closed");
             }
             break;
         }
@@ -645,14 +641,25 @@ async fn handle_worker_connection(
                 
                 let pipeline_count = pipeline.as_ref().map(|p| p.workers.len()).unwrap_or(0);
                 let proxy_url = model_proxy_url(&hub_http_vpn_addr);
-                let (model_name2, model_hash) = {
+                let (model_name2, model_hash, model_num_layers) = {
                     let state_guard = state.lock().await;
-                    (state_guard.model.name.clone(), state_guard.model_hash.clone())
+                    (state_guard.model.name.clone(), state_guard.model_hash.clone(), state_guard.model.num_layers)
                 };
+                
+                // Get this worker's correct assignment from the sorted pipeline
+                let (correct_offset, correct_num, should_reassign) = if let Some(ref p) = pipeline {
+                    p.workers.iter()
+                        .find(|w| w.worker_id == hb.worker_id)
+                        .map(|w| (w.layer_offset, w.num_layers, w.layer_offset != hb.layer_offset || w.num_layers != hb.num_layers))
+                        .unwrap_or((hb.layer_offset, hb.num_layers, false))
+                } else {
+                    (hb.layer_offset, hb.num_layers, false)
+                };
+                
                 let response = HeartbeatResponse {
-                    layer_offset: hb.layer_offset,
-                    num_layers: hb.num_layers,
-                    reassign: false,
+                    layer_offset: correct_offset,
+                    num_layers: correct_num,
+                    reassign: should_reassign,
                     model_name: model_name2,
                     model_url: proxy_url,
                     model_hash,
