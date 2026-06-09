@@ -408,10 +408,14 @@ async fn handle_worker_connection(
         let n = reader.read(&mut tmp).await?;
         if n == 0 {
             if let Some(ref id) = current_worker_id {
-                info!("Worker {} connection closed (waiting for heartbeat cascade to deregister)", id);
+                info!("Worker {} disconnected", id);
+                workers.write().await.remove(id);
                 streams.write().await.remove(id);
+                missed_hbs.lock().await.remove(id);
+                cascade_responded.lock().await.remove(id);
+                info!("Removed {} from workers and streams", id);
             } else {
-                info!("Worker connection closed");
+                info!("Worker disconnected");
             }
             break;
         }
@@ -623,6 +627,12 @@ async fn handle_worker_connection(
                         let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
                         a_score.partial_cmp(&b_score).unwrap()
                     });
+                    // Debug: log sorted worker order
+                    for (i, w) in worker_list.iter().enumerate() {
+                        let score = if w.has_gpu { w.vram_gb * 100.0 } else { 1.0 };
+                        info!("[heartbeat] sorted worker[{}] {}: score={:.0}, layers={}-{}", 
+                            i, w.id, score, w.layer_offset, w.layer_offset + w.num_layers);
+                    }
                     if worker_list.is_empty() {
                         drop(state_guard);
                         None
