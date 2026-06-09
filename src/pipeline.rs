@@ -85,6 +85,7 @@ pub struct InferenceForward {
     pub from_worker: String,
     pub to_worker: String,
     pub data: Vec<u8>,
+    pub hub_addr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

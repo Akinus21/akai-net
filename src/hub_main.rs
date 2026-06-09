@@ -1202,11 +1202,18 @@ async fn start_http_server(port: u16, _worker_port: u16, workers: WorkerMap, sta
                                             m.get("content").and_then(|c| c.as_str())
                                         }).collect::<Vec<_>>().join("\n");
 
+                                        let num_workers = pipeline.workers.len();
+                                        let is_first = true;
+                                        let is_last = num_workers == 1;
+                                        
+                                        info!("Sending inference request {} to {} (is_first={}, is_last={}, workers={})", 
+                                            request_id, first.worker_id, is_first, is_last, num_workers);
+                                        
                                         let req = pipeline::InferenceRequest {
                                             id: request_id.clone(),
                                             tokens: vec![],
-                                            is_first: true,
-                                            is_last: true,
+                                            is_first,
+                                            is_last,
                                             max_new_tokens: max_tokens,
                                             temperature,
                                             prompt: Some(prompt),
