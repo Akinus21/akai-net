@@ -622,6 +622,10 @@ async fn handle_worker_connection(
                     let workers_guard = workers.read().await;
                     let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
                     drop(workers_guard);
+                    // Debug: log workers in hashmap
+                    info!("[heartbeat] workers in hashmap: {}", worker_list.iter()
+                        .map(|w| format!("{}:{:.0}GB", w.id, w.vram_gb))
+                        .collect::<Vec<_>>().join(", "));
                     worker_list.sort_by(|a, b| {
                         let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
                         let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
