@@ -513,10 +513,19 @@ async fn handle_worker_connection(
                     pipeline: Some(pipeline.clone()),
                 };
                 let msg = HubMessage::HeartbeatResponse(response);
-                let data = encode_msg(&msg)?;
+                let data = match encode_msg(&msg) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        error!("[<- {}] Failed to encode HeartbeatResponse: {}", info.id, e);
+                        return Ok(());
+                    }
+                };
                 {
                     let mut w = writer.lock().await;
-                    w.write_all(&data).await?;
+                    if let Err(e) = w.write_all(&data).await {
+                        error!("[<- {}] Failed to send HeartbeatResponse: {}", info.id, e);
+                        return Ok(());
+                    }
                 }
 
                 info!("[-> {}] HeartbeatResponse: layers {}-{}, model={}, pipeline={}",
@@ -624,23 +633,11 @@ async fn handle_worker_connection(
                     let workers_guard = workers.read().await;
                     let mut worker_list: Vec<_> = workers_guard.values().cloned().collect();
                     drop(workers_guard);
-                    // Debug: log workers in hashmap
-                    info!("[heartbeat] workers in hashmap: {}", worker_list.iter()
-                        .map(|w| format!("{}:{:.0}GB", w.id, w.vram_gb))
-                        .collect::<Vec<_>>().join(", "));
                     worker_list.sort_by(|a, b| {
                         let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
                         let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
-                        let cmp = a_score.partial_cmp(&b_score).unwrap();
-                        info!("[heartbeat] sort compare {} vs {}: {:?}", a.id, b.id, cmp);
-                        cmp
+                        a_score.partial_cmp(&b_score).unwrap()
                     });
-                    // Debug: log sorted worker order
-                    for (i, w) in worker_list.iter().enumerate() {
-                        let score = if w.has_gpu { w.vram_gb * 100.0 } else { 1.0 };
-                        info!("[heartbeat] sorted worker[{}] {}: score={:.0}, layers={}-{}", 
-                            i, w.id, score, w.layer_offset, w.layer_offset + w.num_layers);
-                    }
                     if worker_list.is_empty() {
                         drop(state_guard);
                         None
