@@ -629,7 +629,9 @@ async fn handle_worker_connection(
                     worker_list.sort_by(|a, b| {
                         let a_score = if a.has_gpu { a.vram_gb * 100.0 } else { 1.0 };
                         let b_score = if b.has_gpu { b.vram_gb * 100.0 } else { 1.0 };
-                        a_score.partial_cmp(&b_score).unwrap()
+                        let cmp = a_score.partial_cmp(&b_score).unwrap();
+                        info!("[heartbeat] sort compare {} vs {}: {:?}", a.id, b.id, cmp);
+                        cmp
                     });
                     // Debug: log sorted worker order
                     for (i, w) in worker_list.iter().enumerate() {
